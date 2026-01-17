@@ -1739,7 +1739,7 @@ async def soryn_admin_panel(request):
     uptime = get_uptime()
     server_count = len(bot.guilds)
     latency_ms = round(bot.latency * 1000, 2)
-    current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     
     # Get user statistics
     async with db_pool.acquire() as conn:
@@ -1803,7 +1803,7 @@ async def soryn_admin_panel(request):
     # Get next party time
     next_party = "Not active"
     if party_state['active'] and party_state['next_party_time']:
-        time_left = party_state['next_party_time'] - datetime.utcnow()
+        time_left = party_state['next_party_time'] -datetime.now(timezone.utc)
         hours = int(time_left.total_seconds() // 3600)
         minutes = int((time_left.total_seconds() % 3600) // 60)
         next_party = f"{hours}h {minutes}m"
