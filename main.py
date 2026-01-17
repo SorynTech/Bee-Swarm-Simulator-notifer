@@ -2744,8 +2744,9 @@ async def party_done(interaction: discord.Interaction):
     log_to_console(f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
-        f"✅ **Party Complete!**\n\nNext party in 3 hours! 🎉",
-        ephemeral=True
+    "✅ **Party Complete!**\n\nNext party in 3 hours! 🎉",
+    ephemeral=True
+)
 
 
 @bot.tree.command(name="adduser", description="Add user to party reminders in a specific channel (Admin only)")
