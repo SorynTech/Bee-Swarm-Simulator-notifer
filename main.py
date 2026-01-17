@@ -7,7 +7,7 @@ import asyncio
 import asyncpg
 import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import traceback
 from collections import deque
@@ -36,7 +36,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Global state
 db_pool = None
-bot_start_time = datetime.utcnow()
+bot_start_time = datetime.now(timezone.utc)
 update_mode = False
 latency_history = deque(maxlen=60)  # Store last 60 latency measurements
 sessions = {}  # Simple session storage
@@ -46,13 +46,12 @@ console_logs = deque(maxlen=100)  # Store last 100 console logs
 
 def log_to_console(message, level="INFO"):
     """Add message to console logs with timestamp"""
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     console_logs.append({
         'timestamp': timestamp,
         'level': level,
         'message': message
     })
-    # Also print to actual console
     print(f"[{timestamp}] [{level}] {message}")
 
 
@@ -67,11 +66,12 @@ def check_auth(request):
     return session_id in sessions
 
 
+# 4. Fix create_session function (around line 68):
 def create_session():
     """Create a new session"""
     session_id = secrets.token_hex(32)
     sessions[session_id] = {
-        'created_at': datetime.utcnow(),
+        'created_at': datetime.now(timezone.utc),
         'authenticated': True
     }
     return session_id
@@ -93,11 +93,12 @@ def check_soryn_ip(request):
     return client_ip == SORYN_IP
 
 
+# 5. Fix create_soryn_session function (around line 90):
 def create_soryn_session():
     """Create a new Soryn admin session"""
     session_id = secrets.token_hex(32)
     soryn_sessions[session_id] = {
-        'created_at': datetime.utcnow(),
+        'created_at': datetime.now(timezone.utc),
         'authenticated': True
     }
     return session_id
@@ -105,14 +106,20 @@ def create_soryn_session():
 
 # ==================== DATABASE SETUP ====================
 
+# 6. Fix init_db function to disable statement cache (CRITICAL FIX):
 async def init_db():
     """Initialize database connection and create tables"""
     global db_pool
     log_to_console("Initializing database connection...")
-    db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+    # Fix for pgbouncer compatibility - disable prepared statement cache
+    db_pool = await asyncpg.create_pool(
+        DATABASE_URL, 
+        min_size=1, 
+        max_size=10,
+        statement_cache_size=0  # ADD THIS LINE
+    )
     
     async with db_pool.acquire() as conn:
-        # Create tables if they don't exist
         log_to_console("Creating/verifying database tables...")
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS robo_party_users (
@@ -143,16 +150,19 @@ async def init_db():
             )
         ''')
         
-        # Add main user if not exists (will need to be updated with actual guild/channel)
-        await conn.execute('''
-            INSERT INTO robo_party_users (user_id, username, is_active)
-            VALUES ($1, $2, TRUE)
-            ON CONFLICT (user_id) DO NOTHING
-        ''', 581677161006497824, 'Main User')
+        # Check if main user exists first (FIX for duplicate insert)
+        existing_user = await conn.fetchval(
+            'SELECT user_id FROM robo_party_users WHERE user_id = $1',
+            581677161006497824
+        )
+        
+        if not existing_user:
+            await conn.execute('''
+                INSERT INTO robo_party_users (user_id, username, is_active)
+                VALUES ($1, $2, TRUE)
+            ''', 581677161006497824, 'Main User')
     
     log_to_console("✅ Database initialized and tables created", "SUCCESS")
-    print("✅ Database initialized and tables created")
-
 
 # ==================== WEB SERVER & ADMIN PANEL ====================
 
@@ -175,9 +185,10 @@ def get_bee_favicon():
     return f'data:image/svg+xml;base64,{svg_base64}'
 
 
+# 7. Fix get_uptime function (around line 180):
 def get_uptime():
     """Get bot uptime as formatted string"""
-    delta = datetime.utcnow() - bot_start_time
+    delta = datetime.now(timezone.utc) - bot_start_time
     days = delta.days
     hours, remainder = divmod(delta.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -189,7 +200,55 @@ def get_uptime():
     else:
         return f"{minutes}m {seconds}s"
 
-
+async def get_user_status_info(user_id):
+    """Get detailed user status information including online status and activity"""
+    status_info = {
+        'status': 'offline',
+        'status_emoji': '⚫',
+        'activity': None,
+        'display_name': f'User {user_id}'
+    }
+    
+    # Try to find the user in any guild the bot is in
+    for guild in bot.guilds:
+        member = guild.get_member(user_id)
+        if member:
+            # Get display name (server nickname or global display name)
+            status_info['display_name'] = member.display_name
+            
+            # Get status
+            status_map = {
+                discord.Status.online: ('🟢', 'online'),
+                discord.Status.idle: ('🟡', 'idle'),
+                discord.Status.dnd: ('🔴', 'dnd'),
+                discord.Status.offline: ('⚫', 'offline')
+            }
+            status_info['status_emoji'], status_info['status'] = status_map.get(
+                member.status, ('⚫', 'offline')
+            )
+            
+            # Get activity/game
+            if member.activities:
+                for activity in member.activities:
+                    if isinstance(activity, discord.Game):
+                        status_info['activity'] = f"🎮 Playing {activity.name}"
+                        break
+                    elif isinstance(activity, discord.Streaming):
+                        status_info['activity'] = f"📺 Streaming {activity.name}"
+                        break
+                    elif isinstance(activity, discord.Activity):
+                        if activity.type == discord.ActivityType.watching:
+                            status_info['activity'] = f"📺 Watching {activity.name}"
+                        elif activity.type == discord.ActivityType.listening:
+                            status_info['activity'] = f"🎵 Listening to {activity.name}"
+                        elif activity.type == discord.ActivityType.custom:
+                            if activity.name:
+                                status_info['activity'] = f"💬 {activity.name}"
+                        break
+            
+            break  # Found the user, no need to check other guilds
+    
+    return status_info
 async def login_page(request):
     """Admin login page"""
     error = request.query.get('error', '')
@@ -374,6 +433,16 @@ async def login_page(request):
             opacity: 0.5;
             margin-top: 2rem;
             font-size: 0.85rem;
+             }} 
+        .user-activity {{
+            font-size: 0.9rem;
+            color: #4dd0ff;
+            margin: 0.5rem 0;
+            padding: 0.4rem 0.8rem;
+            background: rgba(0, 212, 255, 0.1);
+            border-left: 3px solid #00d4ff;
+            border-radius: 4px;
+            display: inline-block;
         }}
     </style>
 </head>
@@ -463,7 +532,7 @@ async def health_check(request):
     uptime = get_uptime()
     server_count = len(bot.guilds)
     latency_ms = round(bot.latency * 1000, 2)
-    current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     
     # Get latency history for graph
     latency_data = list(latency_history) if latency_history else [latency_ms]
@@ -948,7 +1017,7 @@ async def update_page(request):
         raise web.HTTPFound('/login')
     
     uptime = get_uptime()
-    current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     
     html = f'''
 <!DOCTYPE html>
@@ -1686,6 +1755,7 @@ async def soryn_admin_panel(request):
         ''')
     
     # Enhance user data with server and channel names
+# Enhance user data with server, channel names, and status info
     enhanced_users = []
     for user in users:
         user_dict = dict(user)
@@ -1703,6 +1773,13 @@ async def soryn_admin_panel(request):
             user_dict['channel_name'] = f"#{channel.name}" if channel else f"Unknown Channel ({user['channel_id']})"
         else:
             user_dict['channel_name'] = "Not set"
+        
+        # Get user status and activity information
+        status_info = await get_user_status_info(user['user_id'])
+        user_dict['display_name'] = status_info['display_name']
+        user_dict['status'] = status_info['status']
+        user_dict['status_emoji'] = status_info['status_emoji']
+        user_dict['activity'] = status_info['activity']
         
         enhanced_users.append(user_dict)
     
@@ -1731,9 +1808,13 @@ async def soryn_admin_panel(request):
         minutes = int((time_left.total_seconds() % 3600) // 60)
         next_party = f"{hours}h {minutes}m"
     
-    # Prepare user data for chart
+# Prepare user data for chart
     user_chart_data = json.dumps([1 if u['is_active'] else 0 for u in users])
-    user_labels = json.dumps([u['username'][:15] + '...' if len(u.get('username', '')) > 15 else u.get('username', f'User {u["user_id"]}') for u in users])
+    user_labels = json.dumps([  # <-- Proper indentation
+        u['display_name'][:20] + '...' if len(u.get('display_name', '')) > 20 
+        else u.get('display_name', f'User {u["user_id"]}') 
+        for u in users
+    ])
     
     html = f'''
 <!DOCTYPE html>
@@ -2013,7 +2094,19 @@ async def soryn_admin_panel(request):
             background: rgba(255, 68, 68, 0.2);
             color: #ff6666;
             border: 1px solid #ff4444;
+        }}  # <-- Add this
+        
+        .user-activity {{
+            font-size: 0.9rem;
+            color: #4dd0ff;
+            margin: 0.5rem 0;
+            padding: 0.4rem 0.8rem;
+            background: rgba(0, 212, 255, 0.1);
+            border-left: 3px solid #00d4ff;
+            border-radius: 4px;
+            display: inline-block;
         }}
+
         
         .guilds-grid {{
             display: grid;
@@ -2300,7 +2393,11 @@ async def soryn_admin_panel(request):
                 {"".join([f'''
                 <div class="user-item">
                     <div class="user-info">
-                        <div class="user-name">{u.get('username', f'User #{u["user_id"]}')} (ID: {u["user_id"]})</div>
+                        <div class="user-name">
+                            {u['status_emoji']} {u.get('display_name', f'User #{u["user_id"]}')} 
+                            <span style="opacity: 0.6; font-size: 0.85em;">(ID: {u["user_id"]})</span>
+                        </div>
+                        {f'<div class="user-activity">{u["activity"]}</div>' if u.get('activity') else ''}
                         <div class="user-meta">
                             📍 Server: <strong>{u['guild_name']}</strong> | 
                             💬 Channel: <strong>{u['channel_name']}</strong><br>
@@ -2365,31 +2462,65 @@ async def soryn_admin_panel(request):
             ocean.appendChild(bubble);
         }}
         
-        // User notification chart
+
+        // User notification chart - IMPROVED VERSION
         const ctx = document.getElementById('userChart').getContext('2d');
         const userLabels = {user_labels};
         const userData = {user_chart_data};
         
-        ctx.canvas.height = 300;
+        ctx.canvas.height = 400;
         
-        const barWidth = Math.max(30, ctx.canvas.width / userLabels.length - 10);
-        const maxHeight = 250;
+        const padding = 60;
+        const graphWidth = ctx.canvas.width - padding * 2;
+        const graphHeight = ctx.canvas.height - padding * 2;
+        const barSpacing = 15;
+        const barWidth = Math.min(60, (graphWidth - (userLabels.length - 1) * barSpacing) / userLabels.length);
+        const maxBarHeight = graphHeight - 80; // Leave room for rotated labels
+        
+        // Clear canvas
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        
+        // Draw title
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = 'bold 16px Space Mono';
+        ctx.textAlign = 'center';
+        ctx.fillText('User Status Overview', ctx.canvas.width / 2, 30);
         
         // Draw bars
         userLabels.forEach((label, index) => {{
-            const x = 40 + index * (barWidth + 10);
+            const x = padding + index * (barWidth + barSpacing);
             const isActive = userData[index] === 1;
-            const height = isActive ? maxHeight * 0.8 : maxHeight * 0.3;
-            const y = ctx.canvas.height - 40 - height;
+            const height = isActive ? maxBarHeight * 0.75 : maxBarHeight * 0.25;
+            const y = padding + maxBarHeight - height;
             
-            // Draw bar
-            ctx.fillStyle = isActive ? '#00ff88' : '#ff4444';
+            // Draw bar with gradient
+            const gradient = ctx.createLinearGradient(x, y, x, y + height);
+            if (isActive) {{
+                gradient.addColorStop(0, '#00ff88');
+                gradient.addColorStop(1, '#00cc66');
+            }} else {{
+                gradient.addColorStop(0, '#ff4444');
+                gradient.addColorStop(1, '#cc0000');
+            }}
+            
+            ctx.fillStyle = gradient;
             ctx.fillRect(x, y, barWidth, height);
             
-            // Draw label
+            // Draw bar border
+            ctx.strokeStyle = isActive ? '#00ff88' : '#ff4444';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, barWidth, height);
+            
+            // Draw status icon on bar
+            ctx.fillStyle = '#fff';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(isActive ? '✓' : '✗', x + barWidth / 2, y + height / 2 + 7);
+            
+            // Draw rotated label
             ctx.save();
-            ctx.translate(x + barWidth/2, ctx.canvas.height - 20);
-            ctx.rotate(-Math.PI/4);
+            ctx.translate(x + barWidth / 2, padding + maxBarHeight + 10);
+            ctx.rotate(-Math.PI / 4);
             ctx.fillStyle = '#00d4ff';
             ctx.font = '12px Space Mono';
             ctx.textAlign = 'right';
@@ -2398,16 +2529,28 @@ async def soryn_admin_panel(request):
         }});
         
         // Draw legend
+        const legendY = 50;
+        const legendX = ctx.canvas.width - 150;
+        
+        // Active legend
         ctx.fillStyle = '#00ff88';
-        ctx.fillRect(ctx.canvas.width - 150, 20, 20, 20);
+        ctx.fillRect(legendX, legendY, 20, 20);
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(legendX, legendY, 20, 20);
         ctx.fillStyle = '#00d4ff';
         ctx.font = '14px Space Mono';
-        ctx.fillText('Active', ctx.canvas.width - 120, 35);
+        ctx.textAlign = 'left';
+        ctx.fillText('Active', legendX + 30, legendY + 15);
         
+        // Inactive legend
         ctx.fillStyle = '#ff4444';
-        ctx.fillRect(ctx.canvas.width - 150, 50, 20, 20);
+        ctx.fillRect(legendX, legendY + 30, 20, 20);
+        ctx.strokeStyle = '#ff4444';
+        ctx.strokeRect(legendX, legendY + 30, 20, 20);
         ctx.fillStyle = '#00d4ff';
-        ctx.fillText('Inactive', ctx.canvas.width - 120, 65);
+        ctx.fillText('Inactive', legendX + 30, legendY + 45);
+
         
         // Auto-refresh every 30 seconds
         setTimeout(() => {{
@@ -2475,17 +2618,15 @@ async def start_web_server():
 async def on_ready():
     """Bot startup event"""
     global bot_start_time
-    bot_start_time = datetime.utcnow()
+    bot_start_time = datetime.now(timezone.utc)
     
     log_to_console(f"🤖 Bot logged in as {bot.user} (ID: {bot.user.id})", "SUCCESS")
     log_to_console(f"📊 Connected to {len(bot.guilds)} servers", "INFO")
     print(f'🤖 Logged in as {bot.user} (ID: {bot.user.id})')
     print(f'📊 Connected to {len(bot.guilds)} servers')
     
-    # Initialize database
     await init_db()
     
-    # Sync commands
     try:
         synced = await bot.tree.sync()
         log_to_console(f"✅ Synced {len(synced)} slash commands", "SUCCESS")
@@ -2494,10 +2635,7 @@ async def on_ready():
         log_to_console(f"❌ Failed to sync commands: {e}", "ERROR")
         print(f'❌ Failed to sync commands: {e}')
     
-    # Start web server
     await start_web_server()
-    
-    # Start latency tracking
     bot.loop.create_task(track_latency())
     
     log_to_console("✨ Bot is ready and operational!", "SUCCESS")
@@ -2563,12 +2701,12 @@ async def send_party_reminder():
     
     log_to_console(f"Party reminders complete: {success_count} sent, {fail_count} failed", "INFO")
 
-
+# 13. Fix the start_tracking command to use timezone-aware datetime:
 @bot.tree.command(name="start", description="Start tracking Robo Party")
 async def start_tracking(interaction: discord.Interaction):
     """Start party tracking"""
     party_state['active'] = True
-    party_state['next_party_time'] = datetime.utcnow() + timedelta(seconds=ROBO_PARTY_INTERVAL)
+    party_state['next_party_time'] = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
     party_state['reminder_sent'] = False
     
     log_to_console(f"▶️ Party tracking started by {interaction.user.name} in {interaction.guild.name}", "INFO")
@@ -2581,7 +2719,7 @@ async def start_tracking(interaction: discord.Interaction):
         ephemeral=True
     )
 
-
+# 14. Fix party_done command:
 @bot.tree.command(name="done", description="Mark party as complete")
 async def party_done(interaction: discord.Interaction):
     """Mark party complete"""
@@ -2600,7 +2738,7 @@ async def party_done(interaction: discord.Interaction):
             VALUES ($1, $2)
         ''', interaction.user.id, interaction.guild_id)
     
-    party_state['next_party_time'] = datetime.utcnow() + timedelta(seconds=ROBO_PARTY_INTERVAL)
+    party_state['next_party_time'] = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
     party_state['reminder_sent'] = False
     
     log_to_console(f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
@@ -2608,7 +2746,6 @@ async def party_done(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"✅ **Party Complete!**\n\nNext party in 3 hours! 🎉",
         ephemeral=True
-    )
 
 
 @bot.tree.command(name="adduser", description="Add user to party reminders in a specific channel (Admin only)")
@@ -2635,6 +2772,159 @@ async def add_user(interaction: discord.Interaction, user: discord.User, channel
         ephemeral=True
     )
 
+# 9. ADD THE /sleep COMMAND - Add this after the party_done command:
+
+@bot.tree.command(name="sleep", description="Pause party notifications until a specified time")
+@app_commands.describe(
+    hours="Number of hours to sleep (optional)",
+    minutes="Number of minutes to sleep (optional)",
+    until="Wake up time in HH:MM format UTC (optional)"
+)
+async def sleep_command(
+    interaction: discord.Interaction, 
+    hours: int = 0, 
+    minutes: int = 0,
+    until: str = None
+):
+    """Put party tracker to sleep"""
+    if not party_state['active']:
+        await interaction.response.send_message(
+            "⚠️ Party tracking not active! Use `/start` first.",
+            ephemeral=True
+        )
+        return
+    
+    try:
+        if until:
+            # Parse HH:MM format
+            time_parts = until.split(':')
+            if len(time_parts) != 2:
+                await interaction.response.send_message(
+                    "❌ Invalid time format! Use HH:MM (e.g., 14:30)",
+                    ephemeral=True
+                )
+                return
+            
+            target_hour = int(time_parts[0])
+            target_minute = int(time_parts[1])
+            
+            if not (0 <= target_hour <= 23 and 0 <= target_minute <= 59):
+                await interaction.response.send_message(
+                    "❌ Invalid time! Hours must be 0-23, minutes 0-59",
+                    ephemeral=True
+                )
+                return
+            
+            now = datetime.now(timezone.utc)
+            wake_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+            
+            # If time has passed today, set for tomorrow
+            if wake_time <= now:
+                wake_time += timedelta(days=1)
+            
+            party_state['sleep_until'] = wake_time
+            time_until_wake = wake_time - now
+            hours_until = int(time_until_wake.total_seconds() // 3600)
+            minutes_until = int((time_until_wake.total_seconds() % 3600) // 60)
+            
+            log_to_console(
+                f"💤 Sleep mode activated by {interaction.user.name} until {wake_time.strftime('%H:%M UTC')} "
+                f"({hours_until}h {minutes_until}m)",
+                "INFO"
+            )
+            
+            await interaction.response.send_message(
+                f"💤 **Party Tracker Sleeping**\n\n"
+                f"Notifications paused until **{wake_time.strftime('%H:%M UTC')}**\n"
+                f"({hours_until}h {minutes_until}m from now)\n\n"
+                f"Sleep well! 🌙",
+                ephemeral=True
+            )
+        
+        elif hours > 0 or minutes > 0:
+            # Calculate sleep duration
+            sleep_duration = timedelta(hours=hours, minutes=minutes)
+            wake_time = datetime.now(timezone.utc) + sleep_duration
+            party_state['sleep_until'] = wake_time
+            
+            log_to_console(
+                f"💤 Sleep mode activated by {interaction.user.name} for {hours}h {minutes}m",
+                "INFO"
+            )
+            
+            await interaction.response.send_message(
+                f"💤 **Party Tracker Sleeping**\n\n"
+                f"Notifications paused for **{hours}h {minutes}m**\n"
+                f"Wake up at: {wake_time.strftime('%H:%M UTC')}\n\n"
+                f"Sleep well! 🌙",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Please specify either:\n"
+                "• Duration: `/sleep hours:2 minutes:30`\n"
+                "• Wake time: `/sleep until:14:30`",
+                ephemeral=True
+            )
+    
+    except ValueError:
+        await interaction.response.send_message(
+            "❌ Invalid input! Please check your numbers.",
+            ephemeral=True
+        )
+# 10. UPDATE send_party_reminder to check sleep mode:
+async def send_party_reminder():
+    """Send party reminder to channels"""
+    # Check if bot is sleeping
+    if party_state.get('sleep_until'):
+        now = datetime.now(timezone.utc)
+        if now < party_state['sleep_until']:
+            time_left = party_state['sleep_until'] - now
+            hours = int(time_left.total_seconds() // 3600)
+            minutes = int((time_left.total_seconds() % 3600) // 60)
+            log_to_console(
+                f"💤 Party reminder skipped - sleeping for {hours}h {minutes}m more",
+                "INFO"
+            )
+            return
+        else:
+            # Wake up time has passed
+            log_to_console("☀️ Sleep time ended - resuming notifications", "SUCCESS")
+            party_state['sleep_until'] = None
+    
+    user_data = await get_ping_users()
+    log_to_console(f"Sending party reminders to {len(user_data)} users...", "INFO")
+    
+    success_count = 0
+    fail_count = 0
+    
+    for user_id, guild_id, channel_id in user_data:
+        try:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send(
+                    f"<@{user_id}> 🤖🎉 **ROBO PARTY ALERT!** 🎉🤖\n\n"
+                    f"Your Robo Party is available in approximately 5 minutes!\n"
+                    f"Get ready to party! 🐝✨"
+                )
+                log_to_console(f"✅ Sent notification to user {user_id} in channel #{channel.name}", "SUCCESS")
+                success_count += 1
+            else:
+                log_to_console(f"❌ Channel {channel_id} not found for user {user_id}", "ERROR")
+                fail_count += 1
+        except Exception as e:
+            log_to_console(f"❌ Failed to send notification to channel {channel_id}: {e}", "ERROR")
+            fail_count += 1
+    
+    log_to_console(f"Party reminders complete: {success_count} sent, {fail_count} failed", "INFO")
+
+# 11. Update the party_state dictionary initialization to include sleep_until:
+party_state = {
+    'active': False,
+    'next_party_time': None,
+    'sleep_until': None,
+    'reminder_sent': False
+}
 
 # ==================== OWNER COMMANDS ====================
 
