@@ -1739,7 +1739,7 @@ async def soryn_admin_panel(request):
     uptime = get_uptime()
     server_count = len(bot.guilds)
     latency_ms = round(bot.latency * 1000, 2)
-    current_time = now().strftime('%Y-%m-%d %H:%M:%S UTC')
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     
     # Get user statistics
     async with db_pool.acquire() as conn:
