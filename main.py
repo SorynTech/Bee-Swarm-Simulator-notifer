@@ -24,6 +24,9 @@ PORT = int(os.getenv('PORT', 10000))
 OWNER_ID = 447812883158532106
 ADMIN_USERNAME = os.getenv('ADMIN_USERNAME')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
+SORYN_USERNAME = os.getenv('SORYN_USERNAME')
+SORYN_PASSWORD = os.getenv('SORYN_PASSWORD')
+SORYN_IP = os.getenv('SORYN_IP', '')  # Allowed IP for Soryn backend
 
 # Bot setup
 intents = discord.Intents.default()
@@ -37,6 +40,20 @@ bot_start_time = datetime.utcnow()
 update_mode = False
 latency_history = deque(maxlen=60)  # Store last 60 latency measurements
 sessions = {}  # Simple session storage
+soryn_sessions = {}  # Soryn admin session storage
+console_logs = deque(maxlen=100)  # Store last 100 console logs
+
+
+def log_to_console(message, level="INFO"):
+    """Add message to console logs with timestamp"""
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    console_logs.append({
+        'timestamp': timestamp,
+        'level': level,
+        'message': message
+    })
+    # Also print to actual console
+    print(f"[{timestamp}] [{level}] {message}")
 
 
 def hash_password(password):
@@ -60,19 +77,49 @@ def create_session():
     return session_id
 
 
+def check_soryn_auth(request):
+    """Check if user is authenticated as Soryn"""
+    session_id = request.cookies.get('soryn_session_id')
+    return session_id in soryn_sessions
+
+
+def check_soryn_ip(request):
+    """Check if request is from allowed Soryn IP"""
+    if not SORYN_IP:
+        return True  # No IP restriction if not set
+    
+    # Get client IP (handles proxy headers)
+    client_ip = request.headers.get('X-Forwarded-For', request.remote).split(',')[0].strip()
+    return client_ip == SORYN_IP
+
+
+def create_soryn_session():
+    """Create a new Soryn admin session"""
+    session_id = secrets.token_hex(32)
+    soryn_sessions[session_id] = {
+        'created_at': datetime.utcnow(),
+        'authenticated': True
+    }
+    return session_id
+
+
 # ==================== DATABASE SETUP ====================
 
 async def init_db():
     """Initialize database connection and create tables"""
     global db_pool
+    log_to_console("Initializing database connection...")
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
     
     async with db_pool.acquire() as conn:
         # Create tables if they don't exist
+        log_to_console("Creating/verifying database tables...")
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS robo_party_users (
                 user_id BIGINT PRIMARY KEY,
                 username TEXT,
+                guild_id BIGINT,
+                channel_id BIGINT,
                 added_at TIMESTAMP DEFAULT NOW(),
                 is_active BOOLEAN DEFAULT TRUE
             )
@@ -82,7 +129,8 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS party_history (
                 id SERIAL PRIMARY KEY,
                 completed_at TIMESTAMP DEFAULT NOW(),
-                completed_by BIGINT
+                completed_by BIGINT,
+                guild_id BIGINT
             )
         ''')
         
@@ -95,13 +143,14 @@ async def init_db():
             )
         ''')
         
-        # Add main user if not exists
+        # Add main user if not exists (will need to be updated with actual guild/channel)
         await conn.execute('''
-            INSERT INTO robo_party_users (user_id, username)
-            VALUES ($1, $2)
+            INSERT INTO robo_party_users (user_id, username, is_active)
+            VALUES ($1, $2, TRUE)
             ON CONFLICT (user_id) DO NOTHING
         ''', 581677161006497824, 'Main User')
     
+    log_to_console("✅ Database initialized and tables created", "SUCCESS")
     print("✅ Database initialized and tables created")
 
 
@@ -117,8 +166,13 @@ async def create_html_response(html_content, status=200):
 
 
 def get_bee_favicon():
-    """Get bee emoji as SVG favicon"""
-    return '''data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐝</text></svg>'''
+    """Get bee emoji as base64 encoded SVG favicon"""
+    # Properly encoded SVG to prevent display issues
+    import base64
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐝</text></svg>'
+    svg_bytes = svg.encode('utf-8')
+    svg_base64 = base64.b64encode(svg_bytes).decode('utf-8')
+    return f'data:image/svg+xml;base64,{svg_base64}'
 
 
 def get_uptime():
@@ -146,7 +200,7 @@ async def login_page(request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SorynTech Bot Suite - Login</title>
+    <title>Bee Swarm Notifier - Login</title>
     <link rel="icon" href="{get_bee_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
@@ -329,7 +383,7 @@ async def login_page(request):
     <div class="login-container">
         <div class="bee-icon">🐝</div>
         <h1 class="title">ADMIN LOGIN</h1>
-        <p class="subtitle">SorynTech Bot Suite</p>
+        <p class="subtitle">Bee Swarm Notifier</p>
         
         {"<div class='error-message'>⚠️ Invalid credentials. Please try again.</div>" if error else ""}
         
@@ -421,7 +475,7 @@ async def health_check(request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SorynTech Bot Suite - Status</title>
+    <title>Bee Swarm Notifier - Status</title>
     <link rel="icon" href="{get_bee_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
@@ -710,8 +764,8 @@ async def health_check(request):
     
     <div class="container">
         <div class="header">
-            <h1 class="title">SORYNTECH BOT SUITE</h1>
-            <p class="subtitle">Advanced Discord Bot Management System</p>
+            <h1 class="title">BEE SWARM NOTIFIER</h1>
+            <p class="subtitle">Robo Party Tracking System</p>
             <div class="status-indicator">
                 <div class="status-dot"></div>
                 <span>🟢 ONLINE - ALL SYSTEMS OPERATIONAL</span>
@@ -902,7 +956,7 @@ async def update_page(request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SorynTech Bot Suite - Updating</title>
+    <title>Bee Swarm Notifier - Updating</title>
     <link rel="icon" href="{get_bee_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
@@ -1142,6 +1196,1252 @@ async def update_page(request):
     return await create_html_response(html, status=503)
 
 
+async def soryn_forbidden(request):
+    """Custom 403 page for unauthorized Soryn access - Shark and Bee themed"""
+    html = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>403 - Access Forbidden</title>
+    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6aIPC90ZXh0Pjwvc3ZnPg==" type="image/svg+xml">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Space Mono', monospace;
+            min-height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        .split {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .shark-side {
+            background: linear-gradient(135deg, #001f3f 0%, #003d7a 100%);
+            color: #00d4ff;
+        }
+        
+        .bee-side {
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #00ff88;
+        }
+        
+        .icon-float {
+            position: absolute;
+            font-size: 5rem;
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        .shark-icon {
+            top: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        
+        .bee-icon {
+            top: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateX(-50%) translateY(0); }
+            50% { transform: translateX(-50%) translateY(-20px); }
+        }
+        
+        .content {
+            text-align: center;
+            z-index: 1;
+            padding: 2rem;
+        }
+        
+        .error-code {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 8rem;
+            font-weight: 900;
+            margin-bottom: 1rem;
+            text-shadow: 0 0 30px currentColor;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .error-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+        }
+        
+        .error-message {
+            font-size: 1.1rem;
+            opacity: 0.8;
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+        
+        .divider {
+            width: 4px;
+            background: linear-gradient(to bottom, #00d4ff 0%, #00ff88 100%);
+            box-shadow: 0 0 20px #00d4ff, 0 0 20px #00ff88;
+            position: relative;
+        }
+        
+        .back-button {
+            display: inline-block;
+            padding: 1rem 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid currentColor;
+            border-radius: 10px;
+            color: inherit;
+            text-decoration: none;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .back-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 0 20px currentColor;
+            transform: translateY(-2px);
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            
+            .divider {
+                width: 100%;
+                height: 4px;
+                background: linear-gradient(to right, #00d4ff 0%, #00ff88 100%);
+            }
+            
+            .error-code {
+                font-size: 5rem;
+            }
+            
+            .error-title {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="split shark-side">
+        <div class="icon-float shark-icon">🦈</div>
+        <div class="content">
+            <div class="error-code">403</div>
+            <div class="error-title">Access Forbidden</div>
+            <div class="error-message">
+                This area is restricted to<br>
+                authorized personnel only.<br>
+                <strong>IP address not authorized.</strong>
+            </div>
+            <a href="/" class="back-button">← Return Home</a>
+        </div>
+    </div>
+    
+    <div class="divider"></div>
+    
+    <div class="split bee-side">
+        <div class="icon-float bee-icon">🐝</div>
+        <div class="content">
+            <div class="error-code">403</div>
+            <div class="error-title">Access Denied</div>
+            <div class="error-message">
+                Your location is not permitted<br>
+                to access this backend.<br>
+                <strong>Please contact the administrator.</strong>
+            </div>
+            <a href="/" class="back-button">← Return Home</a>
+        </div>
+    </div>
+</body>
+</html>
+    '''
+    
+    return await create_html_response(html, status=403)
+
+
+async def soryn_login_page(request):
+    """Soryn admin login page - shark themed"""
+    # Check IP restriction
+    if not check_soryn_ip(request):
+        return await soryn_forbidden(request)
+    
+    error = request.query.get('error', '')
+    
+    html = f'''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soryn Backend - Login</title>
+    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6aIPC90ZXh0Pjwvc3ZnPg==" type="image/svg+xml">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
+        
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: 'Space Mono', monospace;
+            background: linear-gradient(135deg, #001f3f 0%, #003d7a 50%, #001f3f 100%);
+            color: #00d4ff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }}
+        
+        .ocean-bg {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 0;
+        }}
+        
+        .shark {{
+            position: absolute;
+            font-size: 60px;
+            animation: swimShark linear infinite;
+        }}
+        
+        @keyframes swimShark {{
+            0% {{
+                left: -100px;
+                top: var(--swim-y);
+            }}
+            100% {{
+                left: 110%;
+                top: var(--swim-y);
+            }}
+        }}
+        
+        .login-container {{
+            background: rgba(0, 31, 63, 0.95);
+            border: 3px solid #00d4ff;
+            border-radius: 20px;
+            padding: 3rem;
+            max-width: 450px;
+            width: 90%;
+            position: relative;
+            z-index: 1;
+            box-shadow: 0 0 50px rgba(0, 212, 255, 0.5);
+        }}
+        
+        .shark-icon {{
+            text-align: center;
+            font-size: 5rem;
+            margin-bottom: 1.5rem;
+            animation: swimBounce 3s ease-in-out infinite;
+        }}
+        
+        @keyframes swimBounce {{
+            0%, 100% {{ transform: translateY(0) rotate(0deg); }}
+            25% {{ transform: translateY(-10px) rotate(-3deg); }}
+            75% {{ transform: translateY(10px) rotate(3deg); }}
+        }}
+        
+        .title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 900;
+            color: #00d4ff;
+            text-shadow: 0 0 20px #00d4ff, 0 0 40px #00d4ff;
+            margin-bottom: 0.5rem;
+            text-align: center;
+        }}
+        
+        .subtitle {{
+            text-align: center;
+            color: #4dd0ff;
+            opacity: 0.9;
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+        }}
+        
+        .warning {{
+            background: rgba(255, 68, 68, 0.15);
+            border: 2px solid #ff4444;
+            color: #ff8888;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            text-align: center;
+            font-size: 0.9rem;
+        }}
+        
+        .error-message {{
+            background: rgba(255, 68, 68, 0.2);
+            border: 1px solid #ff4444;
+            color: #ff6666;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }}
+        
+        .form-group {{
+            margin-bottom: 1.5rem;
+        }}
+        
+        label {{
+            display: block;
+            color: #4dd0ff;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }}
+        
+        input {{
+            width: 100%;
+            padding: 1rem;
+            background: rgba(0, 212, 255, 0.05);
+            border: 2px solid rgba(0, 212, 255, 0.3);
+            border-radius: 10px;
+            color: #00d4ff;
+            font-family: 'Space Mono', monospace;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }}
+        
+        input:focus {{
+            outline: none;
+            border-color: #00d4ff;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+        }}
+        
+        .login-button {{
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #00d4ff 0%, #0080ff 100%);
+            border: none;
+            border-radius: 10px;
+            color: #001f3f;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }}
+        
+        .login-button:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.5);
+        }}
+        
+        .footer-text {{
+            text-align: center;
+            color: #4dd0ff;
+            opacity: 0.6;
+            margin-top: 2rem;
+            font-size: 0.8rem;
+        }}
+    </style>
+</head>
+<body>
+    <div class="ocean-bg" id="ocean"></div>
+    
+    <div class="login-container">
+        <div class="shark-icon">🦈</div>
+        <h1 class="title">SORYN BACKEND</h1>
+        <p class="subtitle">Administrative Control Panel</p>
+        
+        <div class="warning">
+            ⚠️ <strong>AUTHORIZED PERSONNEL ONLY</strong><br>
+            Unauthorized access is prohibited
+        </div>
+        
+        {"<div class='error-message'>❌ Invalid credentials. Access denied.</div>" if error else ""}
+        
+        <form method="POST" action="/STBS/login">
+            <div class="form-group">
+                <label for="username">Soryn Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Soryn Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            
+            <button type="submit" class="login-button">Access Backend</button>
+        </form>
+        
+        <p class="footer-text">🦈 Soryn Tech Backend v1.0</p>
+    </div>
+    
+    <script>
+        // Animated sharks
+        const ocean = document.getElementById('ocean');
+        for (let i = 0; i < 5; i++) {{
+            const shark = document.createElement('div');
+            shark.className = 'shark';
+            shark.textContent = '🦈';
+            shark.style.setProperty('--swim-y', (Math.random() * 80 + 10) + '%');
+            shark.style.animationDuration = (Math.random() * 15 + 10) + 's';
+            shark.style.animationDelay = (Math.random() * 5) + 's';
+            ocean.appendChild(shark);
+        }}
+    </script>
+</body>
+</html>
+    '''
+    
+    return await create_html_response(html)
+
+
+async def soryn_login_submit(request):
+    """Handle Soryn login form submission"""
+    # Check IP restriction
+    if not check_soryn_ip(request):
+        return await soryn_forbidden(request)
+    
+    data = await request.post()
+    username = data.get('username', '')
+    password = data.get('password', '')
+    
+    # Check Soryn credentials
+    if username == SORYN_USERNAME and password == SORYN_PASSWORD:
+        session_id = create_soryn_session()
+        
+        response = web.HTTPFound('/STBS')
+        response.set_cookie('soryn_session_id', session_id, httponly=True, max_age=86400)
+        return response
+    else:
+        raise web.HTTPFound('/STBS/login?error=invalid')
+
+
+async def soryn_logout(request):
+    """Handle Soryn logout"""
+    session_id = request.cookies.get('soryn_session_id')
+    if session_id in soryn_sessions:
+        del soryn_sessions[session_id]
+    
+    response = web.HTTPFound('/STBS/login')
+    response.del_cookie('soryn_session_id')
+    return response
+
+
+async def soryn_admin_panel(request):
+    """Soryn backend admin panel - shark themed, NOT affected by maintenance"""
+    # Check IP restriction first
+    if not check_soryn_ip(request):
+        return await soryn_forbidden(request)
+    
+    # Check Soryn authentication
+    if not check_soryn_auth(request):
+        raise web.HTTPFound('/STBS/login')
+    
+    uptime = get_uptime()
+    server_count = len(bot.guilds)
+    latency_ms = round(bot.latency * 1000, 2)
+    current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    
+    # Get user statistics
+    async with db_pool.acquire() as conn:
+        total_users = await conn.fetchval('SELECT COUNT(*) FROM robo_party_users')
+        active_users = await conn.fetchval('SELECT COUNT(*) FROM robo_party_users WHERE is_active = TRUE')
+        total_parties = await conn.fetchval('SELECT COUNT(*) FROM party_history')
+        
+        # Get all users for notification list with enhanced info
+        users = await conn.fetch('''
+            SELECT user_id, username, guild_id, channel_id, is_active, added_at
+            FROM robo_party_users
+            ORDER BY added_at DESC
+        ''')
+    
+    # Enhance user data with server and channel names
+    enhanced_users = []
+    for user in users:
+        user_dict = dict(user)
+        
+        # Get guild name
+        if user['guild_id']:
+            guild = bot.get_guild(user['guild_id'])
+            user_dict['guild_name'] = guild.name if guild else f"Unknown Server ({user['guild_id']})"
+        else:
+            user_dict['guild_name'] = "Not set"
+        
+        # Get channel name
+        if user['channel_id']:
+            channel = bot.get_channel(user['channel_id'])
+            user_dict['channel_name'] = f"#{channel.name}" if channel else f"Unknown Channel ({user['channel_id']})"
+        else:
+            user_dict['channel_name'] = "Not set"
+        
+        enhanced_users.append(user_dict)
+    
+    users = enhanced_users
+    
+    # Get guild information
+    guild_info = []
+    for guild in bot.guilds:
+        try:
+            # Try to get guild icon
+            icon_url = str(guild.icon.url) if guild.icon else "https://cdn.discordapp.com/embed/avatars/0.png"
+            guild_info.append({
+                'name': guild.name,
+                'id': guild.id,
+                'member_count': guild.member_count,
+                'icon': icon_url
+            })
+        except:
+            pass
+    
+    # Get next party time
+    next_party = "Not active"
+    if party_state['active'] and party_state['next_party_time']:
+        time_left = party_state['next_party_time'] - datetime.utcnow()
+        hours = int(time_left.total_seconds() // 3600)
+        minutes = int((time_left.total_seconds() % 3600) // 60)
+        next_party = f"{hours}h {minutes}m"
+    
+    # Prepare user data for chart
+    user_chart_data = json.dumps([1 if u['is_active'] else 0 for u in users])
+    user_labels = json.dumps([u['username'][:15] + '...' if len(u.get('username', '')) > 15 else u.get('username', f'User {u["user_id"]}') for u in users])
+    
+    html = f'''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soryn Backend - Control Panel</title>
+    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6aIPC90ZXh0Pjwvc3ZnPg==" type="image/svg+xml">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
+        
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: 'Space Mono', monospace;
+            background: linear-gradient(135deg, #001f3f 0%, #003d7a 50%, #001f3f 100%);
+            color: #00d4ff;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }}
+        
+        .ocean-bg {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 0;
+            opacity: 0.3;
+        }}
+        
+        .bubble {{
+            position: absolute;
+            bottom: -50px;
+            width: 20px;
+            height: 20px;
+            background: rgba(0, 212, 255, 0.2);
+            border-radius: 50%;
+            animation: riseBubble linear infinite;
+        }}
+        
+        @keyframes riseBubble {{
+            0% {{
+                bottom: -50px;
+                opacity: 0;
+            }}
+            10% {{
+                opacity: 0.5;
+            }}
+            90% {{
+                opacity: 0.5;
+            }}
+            100% {{
+                bottom: 110vh;
+                opacity: 0;
+            }}
+        }}
+        
+        .navbar {{
+            background: rgba(0, 31, 63, 0.95);
+            border-bottom: 2px solid #00d4ff;
+            padding: 1.5rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 4px 20px rgba(0, 212, 255, 0.3);
+        }}
+        
+        .nav-content {{
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        
+        .nav-brand {{
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }}
+        
+        .shark-icon {{
+            font-size: 2.5rem;
+            animation: swimBounce 3s ease-in-out infinite;
+        }}
+        
+        @keyframes swimBounce {{
+            0%, 100% {{ transform: translateY(0) rotate(0deg); }}
+            25% {{ transform: translateY(-5px) rotate(-3deg); }}
+            75% {{ transform: translateY(5px) rotate(3deg); }}
+        }}
+        
+        .nav-title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 900;
+            color: #00d4ff;
+            text-shadow: 0 0 15px #00d4ff;
+        }}
+        
+        .nav-buttons {{
+            display: flex;
+            gap: 1rem;
+        }}
+        
+        .btn {{
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-family: 'Space Mono', monospace;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }}
+        
+        .btn-maintenance {{
+            background: {"rgba(255, 149, 0, 0.2)" if update_mode else "rgba(0, 212, 255, 0.1)"};
+            border: 2px solid {"#ff9500" if update_mode else "#00d4ff"};
+            color: {"#ff9500" if update_mode else "#00d4ff"};
+        }}
+        
+        .btn-maintenance:hover {{
+            background: {"rgba(255, 149, 0, 0.3)" if update_mode else "rgba(0, 212, 255, 0.2)"};
+            box-shadow: 0 0 15px {"rgba(255, 149, 0, 0.4)" if update_mode else "rgba(0, 212, 255, 0.4)"};
+        }}
+        
+        .btn-logout {{
+            background: rgba(255, 68, 68, 0.1);
+            border: 2px solid #ff4444;
+            color: #ff6666;
+        }}
+        
+        .btn-logout:hover {{
+            background: rgba(255, 68, 68, 0.2);
+            box-shadow: 0 0 15px rgba(255, 68, 68, 0.4);
+        }}
+        
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            position: relative;
+            z-index: 1;
+        }}
+        
+        .status-banner {{
+            background: {"rgba(255, 149, 0, 0.15)" if update_mode else "rgba(0, 255, 136, 0.1)"};
+            border: 2px solid {"#ff9500" if update_mode else "#00ff88"};
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            text-align: center;
+        }}
+        
+        .status-text {{
+            font-size: 1.2rem;
+            color: {"#ff9500" if update_mode else "#00ff88"};
+            font-weight: 700;
+        }}
+        
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }}
+        
+        .stat-card {{
+            background: rgba(0, 31, 63, 0.8);
+            border: 2px solid #00d4ff;
+            border-radius: 16px;
+            padding: 2rem;
+            transition: all 0.3s ease;
+        }}
+        
+        .stat-card:hover {{
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.4);
+        }}
+        
+        .stat-icon {{
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }}
+        
+        .stat-label {{
+            font-size: 0.9rem;
+            color: #4dd0ff;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }}
+        
+        .stat-value {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2rem;
+            font-weight: 700;
+            color: #00d4ff;
+            text-shadow: 0 0 10px #00d4ff;
+        }}
+        
+        .section {{
+            background: rgba(0, 31, 63, 0.8);
+            border: 2px solid #00d4ff;
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }}
+        
+        .section-title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.5rem;
+            color: #00d4ff;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }}
+        
+        .user-list {{
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }}
+        
+        .user-item {{
+            background: rgba(0, 212, 255, 0.05);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 10px;
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        
+        .user-info {{
+            flex: 1;
+        }}
+        
+        .user-name {{
+            font-weight: 600;
+            color: #00d4ff;
+            margin-bottom: 0.25rem;
+        }}
+        
+        .user-meta {{
+            font-size: 0.85rem;
+            color: #4dd0ff;
+            opacity: 0.7;
+        }}
+        
+        .user-status {{
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }}
+        
+        .status-active {{
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid #00ff88;
+        }}
+        
+        .status-inactive {{
+            background: rgba(255, 68, 68, 0.2);
+            color: #ff6666;
+            border: 1px solid #ff4444;
+        }}
+        
+        .guilds-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1.5rem;
+        }}
+        
+        .guild-card {{
+            background: rgba(0, 212, 255, 0.05);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }}
+        
+        .guild-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 5px 20px rgba(0, 212, 255, 0.3);
+        }}
+        
+        .guild-icon {{
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            margin-bottom: 1rem;
+            border: 2px solid #00d4ff;
+        }}
+        
+        .guild-name {{
+            font-weight: 600;
+            color: #00d4ff;
+            margin-bottom: 0.5rem;
+        }}
+        
+        .guild-members {{
+            font-size: 0.85rem;
+            color: #4dd0ff;
+        }}
+        
+        .console-log {{
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 10px;
+            padding: 1rem;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Space Mono', monospace;
+            font-size: 0.85rem;
+        }}
+        
+        .log-entry {{
+            padding: 0.5rem;
+            margin-bottom: 0.25rem;
+            border-left: 3px solid #00d4ff;
+            background: rgba(0, 212, 255, 0.03);
+            border-radius: 4px;
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-start;
+        }}
+        
+        .log-entry:hover {{
+            background: rgba(0, 212, 255, 0.08);
+        }}
+        
+        .log-time {{
+            color: #4dd0ff;
+            opacity: 0.7;
+            flex-shrink: 0;
+        }}
+        
+        .log-level {{
+            font-weight: 700;
+            flex-shrink: 0;
+            min-width: 70px;
+        }}
+        
+        .log-message {{
+            color: #00d4ff;
+            flex: 1;
+        }}
+        
+        .log-info {{
+            border-left-color: #00d4ff;
+        }}
+        
+        .log-info .log-level {{
+            color: #00d4ff;
+        }}
+        
+        .log-success {{
+            border-left-color: #00ff88;
+        }}
+        
+        .log-success .log-level {{
+            color: #00ff88;
+        }}
+        
+        .log-warning {{
+            border-left-color: #ff9500;
+        }}
+        
+        .log-warning .log-level {{
+            color: #ff9500;
+        }}
+        
+        .log-error {{
+            border-left-color: #ff4444;
+        }}
+        
+        .log-error .log-level {{
+            color: #ff4444;
+        }}
+        
+        canvas {{
+            max-width: 100%;
+            height: 300px !important;
+        }}
+        
+        ::-webkit-scrollbar {{
+            width: 8px;
+        }}
+        
+        ::-webkit-scrollbar-track {{
+            background: rgba(0, 31, 63, 0.5);
+        }}
+        
+        ::-webkit-scrollbar-thumb {{
+            background: #00d4ff;
+            border-radius: 4px;
+        }}
+        
+        ::-webkit-scrollbar-thumb:hover {{
+            background: #4dd0ff;
+        }}
+        
+        .maintenance-indicator {{
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: rgba(255, 149, 0, 0.95);
+            border: 3px solid #ff9500;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px rgba(255, 149, 0, 0.5);
+            z-index: 9999;
+            animation: slideInRight 0.5s ease-out, pulseBorder 2s infinite;
+            max-width: 300px;
+        }}
+        
+        @keyframes slideInRight {{
+            from {{
+                transform: translateX(400px);
+                opacity: 0;
+            }}
+            to {{
+                transform: translateX(0);
+                opacity: 1;
+            }}
+        }}
+        
+        @keyframes pulseBorder {{
+            0%, 100% {{
+                box-shadow: 0 8px 32px rgba(255, 149, 0, 0.5);
+            }}
+            50% {{
+                box-shadow: 0 8px 32px rgba(255, 149, 0, 0.8), 0 0 50px rgba(255, 149, 0, 0.4);
+            }}
+        }}
+        
+        .maintenance-indicator-title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        
+        .maintenance-indicator-text {{
+            color: #fff;
+            font-size: 0.9rem;
+            opacity: 0.95;
+        }}
+        
+        @media (max-width: 768px) {{
+            .maintenance-indicator {{
+                top: auto;
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="ocean-bg" id="ocean"></div>
+    
+    {f'''<div class="maintenance-indicator">
+        <div class="maintenance-indicator-title">
+            <span>⚠️</span>
+            <span>MAINTENANCE ACTIVE</span>
+        </div>
+        <div class="maintenance-indicator-text">
+            Public admin panel is showing<br>maintenance mode to users.
+        </div>
+    </div>''' if update_mode else ''}
+    
+    <nav class="navbar">
+        <div class="nav-content">
+            <div class="nav-brand">
+                <div class="shark-icon">🦈</div>
+                <div class="nav-title">SORYN BACKEND</div>
+            </div>
+            <div class="nav-buttons">
+                <form method="POST" action="/STBS/toggle-maintenance" style="display: inline;">
+                    <button type="submit" class="btn btn-maintenance">
+                        {"🟢 DISABLE MAINTENANCE" if update_mode else "🟡 ENABLE MAINTENANCE"}
+                    </button>
+                </form>
+                <a href="/STBS/logout" class="btn btn-logout">🚪 Logout</a>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="container">
+        {"<div class='status-banner'><div class='status-text'>🟡 MAINTENANCE MODE ACTIVE</div></div>" if update_mode else ""}
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">⏱️</div>
+                <div class="stat-label">System Uptime</div>
+                <div class="stat-value">{uptime}</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">📡</div>
+                <div class="stat-label">Bot Latency</div>
+                <div class="stat-value">{latency_ms} ms</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">🌐</div>
+                <div class="stat-label">Server Count</div>
+                <div class="stat-value">{server_count}</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-label">Active Users</div>
+                <div class="stat-value">{active_users}/{total_users}</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">⏰</div>
+                <div class="stat-label">Next Party</div>
+                <div class="stat-value" style="font-size: 1.3rem;">{next_party}</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">🎉</div>
+                <div class="stat-label">Total Parties</div>
+                <div class="stat-value">{total_parties}</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">
+                <span>📊</span>
+                Notification Statistics
+            </h2>
+            <canvas id="userChart"></canvas>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">
+                <span>👥</span>
+                Registered Users ({total_users})
+            </h2>
+            <div class="user-list">
+                {"".join([f'''
+                <div class="user-item">
+                    <div class="user-info">
+                        <div class="user-name">{u.get('username', f'User #{u["user_id"]}')} (ID: {u["user_id"]})</div>
+                        <div class="user-meta">
+                            📍 Server: <strong>{u['guild_name']}</strong> | 
+                            💬 Channel: <strong>{u['channel_name']}</strong><br>
+                            🆔 Guild ID: {u["guild_id"] or "Not set"} | 
+                            🆔 Channel ID: {u["channel_id"] or "Not set"}<br>
+                            📅 Added: {u["added_at"].strftime('%Y-%m-%d %H:%M UTC') if u.get("added_at") else "Unknown"}
+                        </div>
+                    </div>
+                    <div class="user-status {"status-active" if u["is_active"] else "status-inactive"}">
+                        {"✅ ACTIVE" if u["is_active"] else "❌ INACTIVE"}
+                    </div>
+                </div>
+                ''' for u in users])}
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">
+                <span>🌐</span>
+                Connected Servers ({len(guild_info)})
+            </h2>
+            <div class="guilds-grid">
+                {"".join([f'''
+                <div class="guild-card">
+                    <img src="{g['icon']}" alt="{g['name']}" class="guild-icon">
+                    <div class="guild-name">{g['name']}</div>
+                    <div class="guild-members">👥 {g['member_count']} members</div>
+                    <div class="user-meta">ID: {g['id']}</div>
+                </div>
+                ''' for g in guild_info])}
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">
+                <span>📟</span>
+                Console Logs (Last 100)
+            </h2>
+            <div class="console-log" id="consoleLog">
+                {"".join([f'''
+                <div class="log-entry log-{log['level'].lower()}">
+                    <span class="log-time">[{log['timestamp']}]</span>
+                    <span class="log-level">[{log['level']}]</span>
+                    <span class="log-message">{log['message']}</span>
+                </div>
+                ''' for log in reversed(list(console_logs))])}
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Create bubbles
+        const ocean = document.getElementById('ocean');
+        for (let i = 0; i < 30; i++) {{
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            bubble.style.left = Math.random() * 100 + '%';
+            bubble.style.width = (Math.random() * 20 + 10) + 'px';
+            bubble.style.height = bubble.style.width;
+            bubble.style.animationDuration = (Math.random() * 8 + 6) + 's';
+            bubble.style.animationDelay = Math.random() * 5 + 's';
+            ocean.appendChild(bubble);
+        }}
+        
+        // User notification chart
+        const ctx = document.getElementById('userChart').getContext('2d');
+        const userLabels = {user_labels};
+        const userData = {user_chart_data};
+        
+        ctx.canvas.height = 300;
+        
+        const barWidth = Math.max(30, ctx.canvas.width / userLabels.length - 10);
+        const maxHeight = 250;
+        
+        // Draw bars
+        userLabels.forEach((label, index) => {{
+            const x = 40 + index * (barWidth + 10);
+            const isActive = userData[index] === 1;
+            const height = isActive ? maxHeight * 0.8 : maxHeight * 0.3;
+            const y = ctx.canvas.height - 40 - height;
+            
+            // Draw bar
+            ctx.fillStyle = isActive ? '#00ff88' : '#ff4444';
+            ctx.fillRect(x, y, barWidth, height);
+            
+            // Draw label
+            ctx.save();
+            ctx.translate(x + barWidth/2, ctx.canvas.height - 20);
+            ctx.rotate(-Math.PI/4);
+            ctx.fillStyle = '#00d4ff';
+            ctx.font = '12px Space Mono';
+            ctx.textAlign = 'right';
+            ctx.fillText(label, 0, 0);
+            ctx.restore();
+        }});
+        
+        // Draw legend
+        ctx.fillStyle = '#00ff88';
+        ctx.fillRect(ctx.canvas.width - 150, 20, 20, 20);
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '14px Space Mono';
+        ctx.fillText('Active', ctx.canvas.width - 120, 35);
+        
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(ctx.canvas.width - 150, 50, 20, 20);
+        ctx.fillStyle = '#00d4ff';
+        ctx.fillText('Inactive', ctx.canvas.width - 120, 65);
+        
+        // Auto-refresh every 30 seconds
+        setTimeout(() => {{
+            location.reload();
+        }}, 30000);
+    </script>
+</body>
+</html>
+    '''
+    
+    return await create_html_response(html)
+
+
+async def toggle_maintenance_mode(request):
+    """Toggle maintenance mode from Soryn panel"""
+    # Check Soryn authentication
+    if not check_soryn_auth(request):
+        raise web.HTTPFound('/STBS/login')
+    
+    global update_mode
+    update_mode = not update_mode
+    
+    # Change bot status
+    if update_mode:
+        await bot.change_presence(status=discord.Status.idle, activity=discord.Game(name="🔧 Updating..."))
+        log_to_console("🟡 Maintenance mode ENABLED via Soryn web panel", "WARNING")
+    else:
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Notifier"))
+        log_to_console("🟢 Maintenance mode DISABLED via Soryn web panel", "SUCCESS")
+    
+    # Redirect back to Soryn panel
+    raise web.HTTPFound('/STBS')
+
+
 async def start_web_server():
     """Start the web server"""
     app = web.Application()
@@ -1152,6 +2452,13 @@ async def start_web_server():
     app.router.add_get('/dashboard', health_check)
     app.router.add_get('/health', health_check)
     
+    # Soryn backend routes
+    app.router.add_get('/STBS', soryn_admin_panel)
+    app.router.add_get('/STBS/login', soryn_login_page)
+    app.router.add_post('/STBS/login', soryn_login_submit)
+    app.router.add_get('/STBS/logout', soryn_logout)
+    app.router.add_post('/STBS/toggle-maintenance', toggle_maintenance_mode)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
@@ -1159,6 +2466,7 @@ async def start_web_server():
     
     print(f"🌐 Web server started on port {PORT}")
     print(f"🔐 Admin login required - use credentials from .env")
+    print(f"🦈 Soryn backend available at /STBS")
 
 
 # ==================== BOT EVENTS ====================
@@ -1169,6 +2477,8 @@ async def on_ready():
     global bot_start_time
     bot_start_time = datetime.utcnow()
     
+    log_to_console(f"🤖 Bot logged in as {bot.user} (ID: {bot.user.id})", "SUCCESS")
+    log_to_console(f"📊 Connected to {len(bot.guilds)} servers", "INFO")
     print(f'🤖 Logged in as {bot.user} (ID: {bot.user.id})')
     print(f'📊 Connected to {len(bot.guilds)} servers')
     
@@ -1178,8 +2488,10 @@ async def on_ready():
     # Sync commands
     try:
         synced = await bot.tree.sync()
+        log_to_console(f"✅ Synced {len(synced)} slash commands", "SUCCESS")
         print(f'✅ Synced {len(synced)} slash commands')
     except Exception as e:
+        log_to_console(f"❌ Failed to sync commands: {e}", "ERROR")
         print(f'❌ Failed to sync commands: {e}')
     
     # Start web server
@@ -1188,6 +2500,7 @@ async def on_ready():
     # Start latency tracking
     bot.loop.create_task(track_latency())
     
+    log_to_console("✨ Bot is ready and operational!", "SUCCESS")
     print('✨ Bot is ready!')
 
 
@@ -1213,31 +2526,42 @@ party_state = {
 
 
 async def get_ping_users():
-    """Get all active users to ping"""
+    """Get all active users with their channels to ping"""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch('''
-            SELECT user_id FROM robo_party_users
-            WHERE is_active = TRUE
+            SELECT user_id, guild_id, channel_id FROM robo_party_users
+            WHERE is_active = TRUE AND channel_id IS NOT NULL
         ''')
-        return [row['user_id'] for row in rows]
+        return [(row['user_id'], row['guild_id'], row['channel_id']) for row in rows]
 
 
 async def send_party_reminder():
-    """Send party reminder to all registered users"""
-    user_ids = await get_ping_users()
+    """Send party reminder to channels"""
+    user_data = await get_ping_users()
+    log_to_console(f"Sending party reminders to {len(user_data)} users...", "INFO")
     
-    for guild in bot.guilds:
-        for user_id in user_ids:
-            member = guild.get_member(user_id)
-            if member:
-                try:
-                    await member.send(
-                        f"🤖🎉 **ROBO PARTY ALERT!** 🎉🤖\n\n"
-                        f"Your Robo Party is available in approximately 5 minutes!\n"
-                        f"Get ready to party! 🐝✨"
-                    )
-                except discord.Forbidden:
-                    pass
+    success_count = 0
+    fail_count = 0
+    
+    for user_id, guild_id, channel_id in user_data:
+        try:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send(
+                    f"<@{user_id}> 🤖🎉 **ROBO PARTY ALERT!** 🎉🤖\n\n"
+                    f"Your Robo Party is available in approximately 5 minutes!\n"
+                    f"Get ready to party! 🐝✨"
+                )
+                log_to_console(f"✅ Sent notification to user {user_id} in channel #{channel.name}", "SUCCESS")
+                success_count += 1
+            else:
+                log_to_console(f"❌ Channel {channel_id} not found for user {user_id}", "ERROR")
+                fail_count += 1
+        except Exception as e:
+            log_to_console(f"❌ Failed to send notification to channel {channel_id}: {e}", "ERROR")
+            fail_count += 1
+    
+    log_to_console(f"Party reminders complete: {success_count} sent, {fail_count} failed", "INFO")
 
 
 @bot.tree.command(name="start", description="Start tracking Robo Party")
@@ -1246,6 +2570,9 @@ async def start_tracking(interaction: discord.Interaction):
     party_state['active'] = True
     party_state['next_party_time'] = datetime.utcnow() + timedelta(seconds=ROBO_PARTY_INTERVAL)
     party_state['reminder_sent'] = False
+    
+    log_to_console(f"▶️ Party tracking started by {interaction.user.name} in {interaction.guild.name}", "INFO")
+    log_to_console(f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
         f"🐝 **Robo Party Tracker Started!**\n\n"
@@ -1265,14 +2592,18 @@ async def party_done(interaction: discord.Interaction):
         )
         return
     
+    log_to_console(f"✅ Party marked complete by {interaction.user.name}", "SUCCESS")
+    
     async with db_pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO party_history (completed_by)
-            VALUES ($1)
-        ''', interaction.user.id)
+            INSERT INTO party_history (completed_by, guild_id)
+            VALUES ($1, $2)
+        ''', interaction.user.id, interaction.guild_id)
     
     party_state['next_party_time'] = datetime.utcnow() + timedelta(seconds=ROBO_PARTY_INTERVAL)
     party_state['reminder_sent'] = False
+    
+    log_to_console(f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
         f"✅ **Party Complete!**\n\nNext party in 3 hours! 🎉",
@@ -1280,23 +2611,27 @@ async def party_done(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="adduser", description="Add user to party reminders (Admin only)")
-async def add_user(interaction: discord.Interaction, user: discord.User):
-    """Add user to notifications"""
+@bot.tree.command(name="adduser", description="Add user to party reminders in a specific channel (Admin only)")
+async def add_user(interaction: discord.Interaction, user: discord.User, channel: discord.TextChannel):
+    """Add user to notifications in specified channel"""
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("⚠️ Admin only!", ephemeral=True)
         return
     
+    log_to_console(f"📝 Adding user {user.name} ({user.id}) to notifications in #{channel.name}", "INFO")
+    
     async with db_pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO robo_party_users (user_id, username)
-            VALUES ($1, $2)
+            INSERT INTO robo_party_users (user_id, username, guild_id, channel_id)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (user_id) 
-            DO UPDATE SET username = $2, is_active = TRUE
-        ''', user.id, str(user))
+            DO UPDATE SET username = $2, guild_id = $3, channel_id = $4, is_active = TRUE
+        ''', user.id, str(user), interaction.guild_id, channel.id)
+    
+    log_to_console(f"✅ User {user.name} added - will be notified in #{channel.name} on server {interaction.guild.name}", "SUCCESS")
     
     await interaction.response.send_message(
-        f"✅ {user.mention} added to party reminders!",
+        f"✅ {user.mention} will be notified in {channel.mention}!",
         ephemeral=True
     )
 
@@ -1315,9 +2650,11 @@ async def toggle_update_mode(ctx):
     # Change bot status
     if update_mode:
         await bot.change_presence(status=discord.Status.idle, activity=discord.Game(name="🔧 Updating..."))
+        log_to_console("🟡 Maintenance mode ENABLED via Discord command", "WARNING")
         await ctx.send("✅ Update mode **ENABLED** - Status page updated")
     else:
-        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="SorynTech Bot Suite"))
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Notifier"))
+        log_to_console("🟢 Maintenance mode DISABLED via Discord command", "SUCCESS")
         await ctx.send("✅ Update mode **DISABLED** - Back to normal")
     
     # Delete command message for privacy
@@ -1343,6 +2680,12 @@ if __name__ == '__main__':
         print("   Add these to your .env file to enable admin panel access")
         exit(1)
     
-    print("🚀 Starting SorynTech Bot Suite...")
+    if not SORYN_USERNAME or not SORYN_PASSWORD:
+        print("❌ Error: SORYN_USERNAME and SORYN_PASSWORD required in .env file")
+        print("   Add these to your .env file to enable Soryn backend access")
+        exit(1)
+    
+    print("🚀 Starting Bee Swarm Notifier...")
     print(f"🔐 Admin authentication enabled for user: {ADMIN_USERNAME}")
+    print(f"🦈 Soryn backend authentication enabled for user: {SORYN_USERNAME}")
     bot.run(DISCORD_TOKEN)
