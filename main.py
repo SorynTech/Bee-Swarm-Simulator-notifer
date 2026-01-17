@@ -12,6 +12,8 @@ import json
 import traceback
 from collections import deque
 import time
+import hashlib
+import secrets
 
 load_dotenv()
 
@@ -20,6 +22,8 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 PORT = int(os.getenv('PORT', 10000))
 OWNER_ID = 447812883158532106
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
 
 # Bot setup
 intents = discord.Intents.default()
@@ -32,6 +36,28 @@ db_pool = None
 bot_start_time = datetime.utcnow()
 update_mode = False
 latency_history = deque(maxlen=60)  # Store last 60 latency measurements
+sessions = {}  # Simple session storage
+
+
+def hash_password(password):
+    """Hash password with SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def check_auth(request):
+    """Check if user is authenticated"""
+    session_id = request.cookies.get('session_id')
+    return session_id in sessions
+
+
+def create_session():
+    """Create a new session"""
+    session_id = secrets.token_hex(32)
+    sessions[session_id] = {
+        'created_at': datetime.utcnow(),
+        'authenticated': True
+    }
+    return session_id
 
 
 # ==================== DATABASE SETUP ====================
@@ -90,6 +116,11 @@ async def create_html_response(html_content, status=200):
     )
 
 
+def get_bee_favicon():
+    """Get bee emoji as SVG favicon"""
+    return '''data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐝</text></svg>'''
+
+
 def get_uptime():
     """Get bot uptime as formatted string"""
     delta = datetime.utcnow() - bot_start_time
@@ -105,8 +136,273 @@ def get_uptime():
         return f"{minutes}m {seconds}s"
 
 
+async def login_page(request):
+    """Admin login page"""
+    error = request.query.get('error', '')
+    
+    html = f'''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SorynTech Bot Suite - Login</title>
+    <link rel="icon" href="{get_bee_favicon()}" type="image/svg+xml">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
+        
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: 'Space Mono', monospace;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #0a0e27 100%);
+            color: #00ff88;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }}
+        
+        .particles {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 0;
+        }}
+        
+        .particle {{
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: #00ff88;
+            border-radius: 50%;
+            opacity: 0.3;
+            animation: float linear infinite;
+        }}
+        
+        @keyframes float {{
+            0% {{
+                transform: translateY(100vh) translateX(0);
+                opacity: 0;
+            }}
+            10% {{
+                opacity: 0.3;
+            }}
+            90% {{
+                opacity: 0.3;
+            }}
+            100% {{
+                transform: translateY(-100vh) translateX(100px);
+                opacity: 0;
+            }}
+        }}
+        
+        .login-container {{
+            background: rgba(10, 14, 39, 0.9);
+            border: 2px solid #00ff88;
+            border-radius: 20px;
+            padding: 3rem;
+            max-width: 450px;
+            width: 90%;
+            position: relative;
+            z-index: 1;
+            box-shadow: 0 0 50px rgba(0, 255, 136, 0.3);
+        }}
+        
+        .bee-icon {{
+            text-align: center;
+            font-size: 4rem;
+            margin-bottom: 1.5rem;
+            animation: buzz 2s ease-in-out infinite;
+        }}
+        
+        @keyframes buzz {{
+            0%, 100% {{ transform: translateX(0) rotate(0deg); }}
+            25% {{ transform: translateX(-5px) rotate(-5deg); }}
+            75% {{ transform: translateX(5px) rotate(5deg); }}
+        }}
+        
+        .title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2rem;
+            font-weight: 900;
+            color: #00ff88;
+            text-shadow: 0 0 20px #00ff88;
+            margin-bottom: 0.5rem;
+            text-align: center;
+        }}
+        
+        .subtitle {{
+            text-align: center;
+            color: #00ffcc;
+            opacity: 0.8;
+            margin-bottom: 2rem;
+        }}
+        
+        .error-message {{
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid #ff4444;
+            color: #ff6666;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }}
+        
+        .form-group {{
+            margin-bottom: 1.5rem;
+        }}
+        
+        label {{
+            display: block;
+            color: #00ffcc;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }}
+        
+        input {{
+            width: 100%;
+            padding: 1rem;
+            background: rgba(0, 255, 136, 0.05);
+            border: 2px solid rgba(0, 255, 136, 0.3);
+            border-radius: 10px;
+            color: #00ff88;
+            font-family: 'Space Mono', monospace;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }}
+        
+        input:focus {{
+            outline: none;
+            border-color: #00ff88;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);
+        }}
+        
+        .login-button {{
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #00ff88 0%, #00ffcc 100%);
+            border: none;
+            border-radius: 10px;
+            color: #0a0e27;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }}
+        
+        .login-button:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 255, 136, 0.4);
+        }}
+        
+        .login-button:active {{
+            transform: translateY(0);
+        }}
+        
+        .footer-text {{
+            text-align: center;
+            color: #00ffcc;
+            opacity: 0.5;
+            margin-top: 2rem;
+            font-size: 0.85rem;
+        }}
+    </style>
+</head>
+<body>
+    <div class="particles" id="particles"></div>
+    
+    <div class="login-container">
+        <div class="bee-icon">🐝</div>
+        <h1 class="title">ADMIN LOGIN</h1>
+        <p class="subtitle">SorynTech Bot Suite</p>
+        
+        {"<div class='error-message'>⚠️ Invalid credentials. Please try again.</div>" if error else ""}
+        
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            
+            <button type="submit" class="login-button">Access Dashboard</button>
+        </form>
+        
+        <p class="footer-text">🐝 Secured Admin Panel</p>
+    </div>
+    
+    <script>
+        // Create particle animation
+        const particlesContainer = document.getElementById('particles');
+        for (let i = 0; i < 50; i++) {{
+            const particle = document.createElement('div');
+            particle.className = 'particle';
+            particle.style.left = Math.random() * 100 + '%';
+            particle.style.animationDuration = (Math.random() * 10 + 5) + 's';
+            particle.style.animationDelay = Math.random() * 5 + 's';
+            particlesContainer.appendChild(particle);
+        }}
+    </script>
+</body>
+</html>
+    '''
+    
+    return await create_html_response(html)
+
+
+async def login_submit(request):
+    """Handle login form submission"""
+    data = await request.post()
+    username = data.get('username', '')
+    password = data.get('password', '')
+    
+    # Check credentials
+    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        session_id = create_session()
+        
+        response = web.HTTPFound('/dashboard')
+        response.set_cookie('session_id', session_id, httponly=True, max_age=86400)  # 24 hours
+        return response
+    else:
+        raise web.HTTPFound('/login?error=invalid')
+
+
+async def logout(request):
+    """Handle logout"""
+    session_id = request.cookies.get('session_id')
+    if session_id in sessions:
+        del sessions[session_id]
+    
+    response = web.HTTPFound('/login')
+    response.del_cookie('session_id')
+    return response
+
+
 async def health_check(request):
     """Main admin panel page"""
+    # Check authentication
+    if not check_auth(request):
+        raise web.HTTPFound('/login')
+    
     if update_mode:
         return await update_page(request)
     
@@ -126,6 +422,7 @@ async def health_check(request):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SorynTech Bot Suite - Status</title>
+    <link rel="icon" href="{get_bee_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
         
@@ -357,6 +654,27 @@ async def health_check(request):
             border-top: 1px solid rgba(0, 255, 136, 0.2);
         }}
         
+        .logout-button {{
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid #ff4444;
+            border-radius: 8px;
+            color: #ff6666;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            z-index: 1000;
+        }}
+        
+        .logout-button:hover {{
+            background: rgba(255, 68, 68, 0.2);
+            box-shadow: 0 0 20px rgba(255, 68, 68, 0.3);
+            transform: translateY(-2px);
+        }}
+        
         .github-link {{
             display: inline-block;
             margin-top: 1rem;
@@ -387,6 +705,7 @@ async def health_check(request):
     </style>
 </head>
 <body>
+    <a href="/logout" class="logout-button">🚪 Logout</a>
     <div class="particles" id="particles"></div>
     
     <div class="container">
@@ -570,6 +889,10 @@ async def health_check(request):
 
 async def update_page(request):
     """Update mode page"""
+    # Check authentication
+    if not check_auth(request):
+        raise web.HTTPFound('/login')
+    
     uptime = get_uptime()
     current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
     
@@ -580,6 +903,7 @@ async def update_page(request):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SorynTech Bot Suite - Updating</title>
+    <link rel="icon" href="{get_bee_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
         
@@ -744,9 +1068,31 @@ async def update_page(request):
             box-shadow: 0 0 20px rgba(255, 149, 0, 0.5);
             transform: translateY(-3px);
         }}
+        
+        .logout-button {{
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid #ff4444;
+            border-radius: 8px;
+            color: #ff6666;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            z-index: 1000;
+        }}
+        
+        .logout-button:hover {{
+            background: rgba(255, 68, 68, 0.2);
+            box-shadow: 0 0 20px rgba(255, 68, 68, 0.3);
+            transform: translateY(-2px);
+        }}
     </style>
 </head>
 <body>
+    <a href="/logout" class="logout-button">🚪 Logout</a>
     <div class="gears">
         <div class="gear" style="top: 10%; left: 10%; animation-duration: 8s;">⚙️</div>
         <div class="gear" style="top: 20%; right: 15%; animation-duration: 12s; animation-direction: reverse;">⚙️</div>
@@ -799,7 +1145,11 @@ async def update_page(request):
 async def start_web_server():
     """Start the web server"""
     app = web.Application()
-    app.router.add_get('/', health_check)
+    app.router.add_get('/', lambda r: web.HTTPFound('/dashboard'))
+    app.router.add_get('/login', login_page)
+    app.router.add_post('/login', login_submit)
+    app.router.add_get('/logout', logout)
+    app.router.add_get('/dashboard', health_check)
     app.router.add_get('/health', health_check)
     
     runner = web.AppRunner(app)
@@ -808,6 +1158,7 @@ async def start_web_server():
     await site.start()
     
     print(f"🌐 Web server started on port {PORT}")
+    print(f"🔐 Admin login required - use credentials from .env")
 
 
 # ==================== BOT EVENTS ====================
@@ -987,5 +1338,11 @@ if __name__ == '__main__':
         print("❌ Error: DATABASE_URL not found in .env file")
         exit(1)
     
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        print("❌ Error: ADMIN_USERNAME and ADMIN_PASSWORD required in .env file")
+        print("   Add these to your .env file to enable admin panel access")
+        exit(1)
+    
     print("🚀 Starting SorynTech Bot Suite...")
+    print(f"🔐 Admin authentication enabled for user: {ADMIN_USERNAME}")
     bot.run(DISCORD_TOKEN)
