@@ -39,6 +39,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 db_pool = None
 bot_start_time = datetime.now(timezone.utc)
 update_mode = False
+soryn_sleep = False  # Soryn sleep mode
 latency_history = deque(maxlen=60)  # Store last 60 latency measurements
 sessions = {}  # Simple session storage
 soryn_sessions = {}  # Soryn admin session storage
@@ -844,6 +845,44 @@ async def health_check(request):
             transform: translateY(-2px);
         }}
         
+        .soryn-sleep-banner {{
+            background: linear-gradient(135deg, rgba(139, 69, 19, 0.9) 0%, rgba(101, 67, 33, 0.9) 100%);
+            border: 2px solid #8B4513;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(139, 69, 19, 0.4);
+            animation: sleepPulse 3s ease-in-out infinite;
+        }}
+        
+        @keyframes sleepPulse {{
+            0%, 100% {{
+                box-shadow: 0 4px 20px rgba(139, 69, 19, 0.4);
+            }}
+            50% {{
+                box-shadow: 0 4px 30px rgba(139, 69, 19, 0.6), 0 0 50px rgba(139, 69, 19, 0.3);
+            }}
+        }}
+        
+        .soryn-sleep-title {{
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #D2691E;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+        }}
+        
+        .soryn-sleep-message {{
+            color: #CD853F;
+            font-size: 1rem;
+            opacity: 0.95;
+        }}
+        
         .github-link {{
             display: inline-block;
             margin-top: 1rem;
@@ -886,6 +925,17 @@ async def health_check(request):
                 <span>🟢 ONLINE - ALL SYSTEMS OPERATIONAL</span>
             </div>
         </div>
+        
+        {f'''<div class="soryn-sleep-banner">
+            <div class="soryn-sleep-title">
+                <span>🐀</span>
+                <span>SORYN THE RAT IS SLEEPING</span>
+                <span>💤</span>
+            </div>
+            <div class="soryn-sleep-message">
+                The bot will not be updated during this time
+            </div>
+        </div>''' if soryn_sleep else ''}
         
         <div class="stats-grid">
             <div class="stat-card">
@@ -2846,7 +2896,7 @@ async def on_ready():
 async def track_latency():
     """Track latency over time"""
     while True:
-        await asyncio.sleep(30)  # Update every 30 seconds
+        await asyncio.sleep(120)  # Update every 2 minutes
         latency_ms = round(bot.latency * 1000, 2)
         latency_history.append(latency_ms)
 
@@ -3148,6 +3198,29 @@ async def toggle_update_mode(ctx):
         await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Simulator"))
         log_to_console("🟢 Maintenance mode DISABLED via Discord command", "SUCCESS")
         await ctx.send("✅ Update mode **DISABLED** - Back to normal")
+    
+    # Delete command message for privacy
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+
+
+@bot.command(name='soryn-sleep')
+async def toggle_soryn_sleep(ctx):
+    """Toggle Soryn sleep mode (Owner only, hidden command)"""
+    if ctx.author.id != OWNER_ID:
+        return
+    
+    global soryn_sleep
+    soryn_sleep = not soryn_sleep
+    
+    if soryn_sleep:
+        log_to_console("💤 Soryn sleep mode ENABLED - Admin panel will show sleep banner", "WARNING")
+        await ctx.send("✅ Soryn sleep mode **ENABLED** 🐀💤\nAdmin panel will show sleep banner.")
+    else:
+        log_to_console("☀️ Soryn sleep mode DISABLED - Admin panel back to normal", "SUCCESS")
+        await ctx.send("✅ Soryn sleep mode **DISABLED** 🐀☀️\nAdmin panel back to normal.")
     
     # Delete command message for privacy
     try:
