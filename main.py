@@ -186,6 +186,16 @@ def get_bee_favicon():
     return f'data:image/svg+xml;base64,{svg_base64}'
 
 
+def get_rat_favicon():
+    """Get rat emoji as base64 encoded SVG favicon"""
+    # Properly encoded SVG to prevent display issues
+    import base64
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐀</text></svg>'
+    svg_bytes = svg.encode('utf-8')
+    svg_base64 = base64.b64encode(svg_bytes).decode('utf-8')
+    return f'data:image/svg+xml;base64,{svg_base64}'
+
+
 # 7. Fix get_uptime function (around line 180):
 def get_uptime():
     """Get bot uptime as formatted string"""
@@ -1302,15 +1312,15 @@ async def update_page(request):
 
 
 async def soryn_forbidden(request):
-    """Custom 403 page for unauthorized Soryn access - Shark and Bee themed"""
-    html = '''
+    """Custom 403 page for unauthorized Soryn access - Rat and Bee themed"""
+    html = f'''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>403 - Access Forbidden</title>
-    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6aIPC90ZXh0Pjwvc3ZnPg==" type="image/svg+xml">
+    <link rel="icon" href="{get_rat_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
         
@@ -1454,7 +1464,7 @@ async def soryn_forbidden(request):
 </head>
 <body>
     <div class="split shark-side">
-        <div class="icon-float shark-icon">🦈</div>
+        <div class="icon-float shark-icon">🐀</div>
         <div class="content">
             <div class="error-code">403</div>
             <div class="error-title">Access Forbidden</div>
@@ -1504,7 +1514,7 @@ async def soryn_login_page(request):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Soryn Backend - Login</title>
-    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6aIPC90ZXh0Pjwvc3ZnPg==" type="image/svg+xml">
+    <link rel="icon" href="{get_rat_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
         
@@ -1682,7 +1692,7 @@ async def soryn_login_page(request):
     <div class="ocean-bg" id="ocean"></div>
     
     <div class="login-container">
-        <div class="shark-icon">🦈</div>
+        <div class="shark-icon">🐀</div>
         <h1 class="title">SORYN BACKEND</h1>
         <p class="subtitle">Administrative Control Panel</p>
         
@@ -1707,16 +1717,16 @@ async def soryn_login_page(request):
             <button type="submit" class="login-button">Access Backend</button>
         </form>
         
-        <p class="footer-text">🦈 Soryn Tech Backend v1.0</p>
+        <p class="footer-text">🐀 Soryn Tech Backend v2.0</p>
     </div>
     
     <script>
-        // Animated sharks
+        // Animated rats
         const ocean = document.getElementById('ocean');
         for (let i = 0; i < 5; i++) {{
             const shark = document.createElement('div');
             shark.className = 'shark';
-            shark.textContent = '🦈';
+            shark.textContent = '🐀';
             shark.style.setProperty('--swim-y', (Math.random() * 80 + 10) + '%');
             shark.style.animationDuration = (Math.random() * 15 + 10) + 's';
             shark.style.animationDelay = (Math.random() * 5) + 's';
@@ -1892,7 +1902,7 @@ async def soryn_admin_panel(request):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Soryn Backend - Control Panel</title>
-    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6aIPC90ZXh0Pjwvc3ZnPg==" type="image/svg+xml">
+    <link rel="icon" href="{get_rat_favicon()}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
         
@@ -2471,7 +2481,7 @@ async def soryn_admin_panel(request):
     <nav class="navbar">
         <div class="nav-content">
             <div class="nav-brand">
-                <div class="shark-icon">🦈</div>
+                <div class="shark-icon">🐀</div>
                 <div class="nav-title">SORYN BACKEND</div>
             </div>
             <div class="nav-buttons">
