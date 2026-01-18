@@ -1313,6 +1313,7 @@ async def update_page(request):
 
 async def soryn_forbidden(request):
     """Custom 403 page for unauthorized Soryn access - Rat and Bee themed"""
+    rat_favicon = get_rat_favicon()
     html = f'''
 <!DOCTYPE html>
 <html lang="en">
@@ -1320,108 +1321,108 @@ async def soryn_forbidden(request):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>403 - Access Forbidden</title>
-    <link rel="icon" href="{get_rat_favicon()}" type="image/svg+xml">
+    <link rel="icon" href="{rat_favicon}" type="image/svg+xml">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
         
-        * {
+        * {{
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-        }
+        }}
         
-        body {
+        body {{
             font-family: 'Space Mono', monospace;
             min-height: 100vh;
             display: flex;
             overflow: hidden;
-        }
+        }}
         
-        .split {
+        .split {{
             flex: 1;
             display: flex;
             align-items: center;
             justify-content: center;
             position: relative;
             overflow: hidden;
-        }
+        }}
         
-        .shark-side {
+        .shark-side {{
             background: linear-gradient(135deg, #001f3f 0%, #003d7a 100%);
             color: #00d4ff;
-        }
+        }}
         
-        .bee-side {
+        .bee-side {{
             background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
             color: #00ff88;
-        }
+        }}
         
-        .icon-float {
+        .icon-float {{
             position: absolute;
             font-size: 5rem;
             animation: float 3s ease-in-out infinite;
-        }
+        }}
         
-        .shark-icon {
+        .shark-icon {{
             top: 10%;
             left: 50%;
             transform: translateX(-50%);
-        }
+        }}
         
-        .bee-icon {
+        .bee-icon {{
             top: 10%;
             left: 50%;
             transform: translateX(-50%);
-        }
+        }}
         
-        @keyframes float {
-            0%, 100% { transform: translateX(-50%) translateY(0); }
-            50% { transform: translateX(-50%) translateY(-20px); }
-        }
+        @keyframes float {{
+            0%, 100% {{ transform: translateX(-50%) translateY(0); }}
+            50% {{ transform: translateX(-50%) translateY(-20px); }}
+        }}
         
-        .content {
+        .content {{
             text-align: center;
             z-index: 1;
             padding: 2rem;
-        }
+        }}
         
-        .error-code {
+        .error-code {{
             font-family: 'Orbitron', sans-serif;
             font-size: 8rem;
             font-weight: 900;
             margin-bottom: 1rem;
             text-shadow: 0 0 30px currentColor;
             animation: pulse 2s ease-in-out infinite;
-        }
+        }}
         
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-        }
+        @keyframes pulse {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.7; }}
+        }}
         
-        .error-title {
+        .error-title {{
             font-family: 'Orbitron', sans-serif;
             font-size: 2rem;
             font-weight: 700;
             margin-bottom: 1rem;
             text-transform: uppercase;
-        }
+        }}
         
-        .error-message {
+        .error-message {{
             font-size: 1.1rem;
             opacity: 0.8;
             margin-bottom: 2rem;
             line-height: 1.6;
-        }
+        }}
         
-        .divider {
+        .divider {{
             width: 4px;
             background: linear-gradient(to bottom, #00d4ff 0%, #00ff88 100%);
             box-shadow: 0 0 20px #00d4ff, 0 0 20px #00ff88;
             position: relative;
-        }
+        }}
         
-        .back-button {
+        .back-button {{
             display: inline-block;
             padding: 1rem 2rem;
             background: rgba(255, 255, 255, 0.1);
@@ -1433,33 +1434,33 @@ async def soryn_forbidden(request):
             transition: all 0.3s ease;
             text-transform: uppercase;
             letter-spacing: 1px;
-        }
+        }}
         
-        .back-button:hover {
+        .back-button:hover {{
             background: rgba(255, 255, 255, 0.2);
             box-shadow: 0 0 20px currentColor;
             transform: translateY(-2px);
-        }
+        }}
         
-        @media (max-width: 768px) {
-            body {
+        @media (max-width: 768px) {{
+            body {{
                 flex-direction: column;
-            }
+            }}
             
-            .divider {
+            .divider {{
                 width: 100%;
                 height: 4px;
                 background: linear-gradient(to right, #00d4ff 0%, #00ff88 100%);
-            }
+            }}
             
-            .error-code {
+            .error-code {{
                 font-size: 5rem;
-            }
+            }}
             
-            .error-title {
+            .error-title {{
                 font-size: 1.5rem;
-            }
-        }
+            }}
+        }}
     </style>
 </head>
 <body>
