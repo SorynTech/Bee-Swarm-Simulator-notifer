@@ -28,10 +28,11 @@ SORYN_USERNAME = os.getenv('SORYN_USERNAME')
 SORYN_PASSWORD = os.getenv('SORYN_PASSWORD')
 SORYN_IP = os.getenv('SORYN_IP', '')  # Allowed IP for Soryn backend
 
-# Bot setup
+# Bot setup with proper intents
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
+intents.members = True  # Member intent for user info
+intents.presences = True  # Presence intent for status/activity tracking
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Global state
@@ -201,30 +202,61 @@ def get_uptime():
         return f"{minutes}m {seconds}s"
 
 async def get_user_status_info(user_id):
-    """Get detailed user status information including online status and activity"""
+    """Get detailed user status information including online status, activity, and profile picture"""
     status_info = {
-        'status': 'offline',
+        'status': 'Offline',
         'status_emoji': '⚫',
         'activity': None,
-        'display_name': f'User {user_id}'
+        'display_name': f'User {user_id}',
+        'avatar_url': 'https://cdn.discordapp.com/embed/avatars/0.png'
     }
     
     # Try to find the user in any guild the bot is in
+    member = None
+    user_obj = None
+    
     for guild in bot.guilds:
         member = guild.get_member(user_id)
         if member:
-            # Get display name (server nickname or global display name)
-            status_info['display_name'] = member.display_name
-            
-            # Get status
+            break
+    
+    # If not found in guilds, try to fetch user directly
+    if not member:
+        try:
+            user_obj = await bot.fetch_user(user_id)
+        except:
+            return status_info
+    
+    # Get user or member object
+    target = member if member else user_obj
+    
+    if target:
+        # Get display name - USING GLOBAL DISPLAY NAME
+        if hasattr(target, 'global_name') and target.global_name:
+            status_info['display_name'] = target.global_name
+        else:
+            status_info['display_name'] = target.name
+        
+        # Get avatar URL
+        if target.avatar:
+            status_info['avatar_url'] = str(target.avatar.url)
+        elif hasattr(target, 'default_avatar'):
+            status_info['avatar_url'] = str(target.default_avatar.url)
+        else:
+            # Fallback for default avatar
+            default_num = (user_id >> 22) % 6
+            status_info['avatar_url'] = f'https://cdn.discordapp.com/embed/avatars/{default_num}.png'
+        
+        # Get status (only available for members in guilds with presence intent)
+        if member:
             status_map = {
-                discord.Status.online: ('🟢', 'online'),
-                discord.Status.idle: ('🟡', 'idle'),
-                discord.Status.dnd: ('🔴', 'dnd'),
-                discord.Status.offline: ('⚫', 'offline')
+                discord.Status.online: ('🟢', 'Online'),
+                discord.Status.idle: ('🟡', 'Idle'),
+                discord.Status.dnd: ('🔴', 'Do Not Disturb'),
+                discord.Status.offline: ('⚫', 'Offline')
             }
             status_info['status_emoji'], status_info['status'] = status_map.get(
-                member.status, ('⚫', 'offline')
+                member.status, ('⚫', 'Offline')
             )
             
             # Get activity/game
@@ -236,6 +268,9 @@ async def get_user_status_info(user_id):
                     elif isinstance(activity, discord.Streaming):
                         status_info['activity'] = f"📺 Streaming {activity.name}"
                         break
+                    elif isinstance(activity, discord.Spotify):
+                        status_info['activity'] = f"🎵 Listening to {activity.title}"
+                        break
                     elif isinstance(activity, discord.Activity):
                         if activity.type == discord.ActivityType.watching:
                             status_info['activity'] = f"📺 Watching {activity.name}"
@@ -245,8 +280,6 @@ async def get_user_status_info(user_id):
                             if activity.name:
                                 status_info['activity'] = f"💬 {activity.name}"
                         break
-            
-            break  # Found the user, no need to check other guilds
     
     return status_info
 async def login_page(request):
@@ -1780,6 +1813,7 @@ async def soryn_admin_panel(request):
         user_dict['status'] = status_info['status']
         user_dict['status_emoji'] = status_info['status_emoji']
         user_dict['activity'] = status_info['activity']
+        user_dict['avatar_url'] = status_info['avatar_url']  # Add avatar URL
         
         enhanced_users.append(user_dict)
     
@@ -1810,11 +1844,38 @@ async def soryn_admin_panel(request):
     
 # Prepare user data for chart
     user_chart_data = json.dumps([1 if u['is_active'] else 0 for u in users])
-    user_labels = json.dumps([  # <-- Proper indentation
+    user_labels = json.dumps([
         u['display_name'][:20] + '...' if len(u.get('display_name', '')) > 20 
         else u.get('display_name', f'User {u["user_id"]}') 
         for u in users
     ])
+    
+    # Prepare active users list with sleep status
+    active_user_list = []
+    for user in users:
+        if user['is_active']:
+            # Check if tracker is sleeping
+            sleep_status = "Awake"
+            if party_state.get('sleep_until'):
+                now = datetime.now(timezone.utc)
+                if now < party_state['sleep_until']:
+                    time_left = party_state['sleep_until'] - now
+                    hours = int(time_left.total_seconds() // 3600)
+                    minutes = int((time_left.total_seconds() % 3600) // 60)
+                    sleep_status = f"Sleeping until {party_state['sleep_until'].strftime('%H:%M UTC')} ({hours}h {minutes}m)"
+            
+            user_info = {
+                'user_id': user['user_id'],
+                'display_name': user['display_name'],
+                'avatar_url': user['avatar_url'],
+                'status': user['status'],
+                'status_emoji': user['status_emoji'],
+                'activity': user['activity'],
+                'sleep_status': sleep_status,
+                'guild_name': user.get('guild_name', 'Unknown'),
+                'channel_name': user.get('channel_name', 'Unknown')
+            }
+            active_user_list.append(user_info)
     
     html = f'''
 <!DOCTYPE html>
@@ -2094,7 +2155,7 @@ async def soryn_admin_panel(request):
             background: rgba(255, 68, 68, 0.2);
             color: #ff6666;
             border: 1px solid #ff4444;
-        }}  # <-- Add this
+        }}
         
         .user-activity {{
             font-size: 0.9rem;
@@ -2105,6 +2166,87 @@ async def soryn_admin_panel(request):
             border-left: 3px solid #00d4ff;
             border-radius: 4px;
             display: inline-block;
+        }}
+        
+        /* Active Users Section Styles */
+        .active-users-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }}
+        
+        .active-user-card {{
+            background: rgba(0, 212, 255, 0.05);
+            border: 2px solid rgba(0, 212, 255, 0.3);
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            gap: 1rem;
+            transition: all 0.3s ease;
+        }}
+        
+        .active-user-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
+            border-color: #00d4ff;
+        }}
+        
+        .user-avatar {{
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 3px solid #00d4ff;
+            object-fit: cover;
+            flex-shrink: 0;
+        }}
+        
+        .user-details {{
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }}
+        
+        .user-name-row {{
+            font-size: 1.1rem;
+            color: #00d4ff;
+            font-weight: 600;
+        }}
+        
+        .user-status-text {{
+            font-size: 0.9rem;
+            color: #4dd0ff;
+            opacity: 0.8;
+        }}
+        
+        .user-activity-badge {{
+            background: rgba(0, 212, 255, 0.15);
+            border-left: 3px solid #00d4ff;
+            padding: 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            color: #4dd0ff;
+        }}
+        
+        .sleep-indicator {{
+            background: rgba(255, 204, 0, 0.15);
+            border: 1px solid rgba(255, 204, 0, 0.5);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            color: #ffcc00;
+        }}
+        
+        .sleep-indicator.awake {{
+            background: rgba(0, 255, 136, 0.15);
+            border: 1px solid rgba(0, 255, 136, 0.5);
+            color: #00ff88;
+        }}
+        
+        .user-location {{
+            font-size: 0.8rem;
+            color: #4dd0ff;
+            opacity: 0.7;
         }}
 
         
@@ -2358,8 +2500,14 @@ async def soryn_admin_panel(request):
             </div>
             
             <div class="stat-card">
-                <div class="stat-icon">👥</div>
+                <div class="stat-icon">✅</div>
                 <div class="stat-label">Active Users</div>
+                <div class="stat-value">{active_users}</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-label">Notified Users</div>
                 <div class="stat-value">{active_users}/{total_users}</div>
             </div>
             
@@ -2373,6 +2521,33 @@ async def soryn_admin_panel(request):
                 <div class="stat-icon">🎉</div>
                 <div class="stat-label">Total Parties</div>
                 <div class="stat-value">{total_parties}</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">
+                <span>👤</span>
+                Active Users ({len(active_user_list)})
+            </h2>
+            <div class="active-users-grid">
+                {"".join([f'''
+                <div class="active-user-card">
+                    <img src="{u['avatar_url']}" alt="{u['display_name']}" class="user-avatar" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                    <div class="user-details">
+                        <div class="user-name-row">
+                            {u['status_emoji']} <strong>{u['display_name']}</strong>
+                        </div>
+                        <div class="user-status-text">{u['status']}</div>
+                        {f'<div class="user-activity-badge">{u["activity"]}</div>' if u.get('activity') else ''}
+                        <div class="sleep-indicator {"awake" if u['sleep_status'] == "Awake" else ""}">
+                            {"✅ " + u['sleep_status'] if u['sleep_status'] == "Awake" else "💤 " + u['sleep_status']}
+                        </div>
+                        <div class="user-location">
+                            📍 {u['guild_name']} → {u['channel_name']}
+                        </div>
+                    </div>
+                </div>
+                ''' for u in active_user_list]) if active_user_list else '<p style="text-align: center; color: #4dd0ff; padding: 2rem;">No active users currently registered.</p>'}
             </div>
         </div>
         
@@ -2578,7 +2753,7 @@ async def toggle_maintenance_mode(request):
         await bot.change_presence(status=discord.Status.idle, activity=discord.Game(name="🔧 Updating..."))
         log_to_console("🟡 Maintenance mode ENABLED via Soryn web panel", "WARNING")
     else:
-        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Notifier"))
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Simulator"))
         log_to_console("🟢 Maintenance mode DISABLED via Soryn web panel", "SUCCESS")
     
     # Redirect back to Soryn panel
@@ -2637,6 +2812,13 @@ async def on_ready():
     
     await start_web_server()
     bot.loop.create_task(track_latency())
+    
+    # Set bot presence to "Playing Bee Swarm Simulator"
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Game(name="Bee Swarm Simulator")
+    )
+    log_to_console("🎮 Bot status set to 'Playing Bee Swarm Simulator'", "SUCCESS")
     
     log_to_console("✨ Bot is ready and operational!", "SUCCESS")
     print('✨ Bot is ready!')
@@ -2944,7 +3126,7 @@ async def toggle_update_mode(ctx):
         log_to_console("🟡 Maintenance mode ENABLED via Discord command", "WARNING")
         await ctx.send("✅ Update mode **ENABLED** - Status page updated")
     else:
-        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Notifier"))
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Bee Swarm Simulator"))
         log_to_console("🟢 Maintenance mode DISABLED via Discord command", "SUCCESS")
         await ctx.send("✅ Update mode **DISABLED** - Back to normal")
     
