@@ -259,27 +259,30 @@ async def get_user_status_info(user_id):
                 member.status, ('⚫', 'Offline')
             )
             
-            # Get activity/game
+            # Get activity/game - check all activities and prioritize the most relevant
             if member.activities:
+                activity_list = []
                 for activity in member.activities:
                     if isinstance(activity, discord.Game):
-                        status_info['activity'] = f"🎮 Playing {activity.name}"
-                        break
+                        activity_list.append(f"🎮 Playing {activity.name}")
                     elif isinstance(activity, discord.Streaming):
-                        status_info['activity'] = f"📺 Streaming {activity.name}"
-                        break
+                        activity_list.append(f"📺 Streaming {activity.name}")
                     elif isinstance(activity, discord.Spotify):
-                        status_info['activity'] = f"🎵 Listening to {activity.title}"
-                        break
+                        activity_list.append(f"🎵 Listening to {activity.title}")
+                    elif isinstance(activity, discord.CustomActivity):
+                        if activity.name:
+                            activity_list.append(f"💬 {activity.name}")
                     elif isinstance(activity, discord.Activity):
                         if activity.type == discord.ActivityType.watching:
-                            status_info['activity'] = f"📺 Watching {activity.name}"
+                            activity_list.append(f"📺 Watching {activity.name}")
                         elif activity.type == discord.ActivityType.listening:
-                            status_info['activity'] = f"🎵 Listening to {activity.name}"
-                        elif activity.type == discord.ActivityType.custom:
-                            if activity.name:
-                                status_info['activity'] = f"💬 {activity.name}"
-                        break
+                            activity_list.append(f"🎵 Listening to {activity.name}")
+                        elif activity.type == discord.ActivityType.playing:
+                            activity_list.append(f"🎮 Playing {activity.name}")
+                
+                # Set the first non-custom activity, or the custom status if that's all we have
+                if activity_list:
+                    status_info['activity'] = activity_list[0]
     
     return status_info
 async def login_page(request):
@@ -1875,6 +1878,11 @@ async def soryn_admin_panel(request):
                 'guild_name': user.get('guild_name', 'Unknown'),
                 'channel_name': user.get('channel_name', 'Unknown')
             }
+            
+            # Debug logging for activity
+            if user['activity']:
+                log_to_console(f"📊 User {user['display_name']} has activity: {user['activity']}", "INFO")
+            
             active_user_list.append(user_info)
     
     html = f'''
@@ -2538,7 +2546,7 @@ async def soryn_admin_panel(request):
                             {u['status_emoji']} <strong>{u['display_name']}</strong>
                         </div>
                         <div class="user-status-text">{u['status']}</div>
-                        {f'<div class="user-activity-badge">{u["activity"]}</div>' if u.get('activity') else ''}
+                        {f'<div class="user-activity-badge">{u["activity"]}</div>' if u.get('activity') and u['activity'] is not None and str(u['activity']).strip() else ''}
                         <div class="sleep-indicator {"awake" if u['sleep_status'] == "Awake" else ""}">
                             {"✅ " + u['sleep_status'] if u['sleep_status'] == "Awake" else "💤 " + u['sleep_status']}
                         </div>
