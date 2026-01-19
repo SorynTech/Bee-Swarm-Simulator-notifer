@@ -3384,5 +3384,5 @@ if __name__ == '__main__':
     
     print("🚀 Starting Bee Swarm Notifier...")
     print(f"🔐 Admin authentication enabled for user: {ADMIN_USERNAME}")
-    print(f"🦈 Soryn backend authentication enabled for user: {SORYN_USERNAME}")
+    print(f"🐀 Welcome Soryn The Rat: {SORYN_USERNAME}")
     bot.run(DISCORD_TOKEN)
