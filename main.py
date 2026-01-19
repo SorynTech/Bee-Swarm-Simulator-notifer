@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import aiohttp
 from aiohttp import web
@@ -2080,6 +2080,17 @@ async def soryn_admin_panel(request):
             box-shadow: 0 0 15px {"rgba(255, 149, 0, 0.4)" if update_mode else "rgba(0, 212, 255, 0.4)"};
         }}
         
+        .btn-sleep {{
+            background: {"rgba(255, 204, 0, 0.2)" if soryn_sleep else "rgba(139, 69, 19, 0.1)"};
+            border: 2px solid {"#ffcc00" if soryn_sleep else "#8B4513"};
+            color: {"#ffcc00" if soryn_sleep else "#D2691E"};
+        }}
+        
+        .btn-sleep:hover {{
+            background: {"rgba(255, 204, 0, 0.3)" if soryn_sleep else "rgba(139, 69, 19, 0.2)"};
+            box-shadow: 0 0 15px {"rgba(255, 204, 0, 0.4)" if soryn_sleep else "rgba(139, 69, 19, 0.4)"};
+        }}
+        
         .btn-logout {{
             background: rgba(255, 68, 68, 0.1);
             border: 2px solid #ff4444;
@@ -2541,6 +2552,11 @@ async def soryn_admin_panel(request):
                         {"🟢 DISABLE MAINTENANCE" if update_mode else "🟡 ENABLE MAINTENANCE"}
                     </button>
                 </form>
+                <form method="POST" action="/STBS/toggle-soryn-sleep" style="display: inline;">
+                    <button type="submit" class="btn btn-sleep">
+                        {"☀️ WAKE UP" if soryn_sleep else "💤 SLEEP MODE"}
+                    </button>
+                </form>
                 <a href="/STBS/logout" class="btn btn-logout">🚪 Logout</a>
             </div>
         </div>
@@ -2829,6 +2845,24 @@ async def toggle_maintenance_mode(request):
     raise web.HTTPFound('/STBS')
 
 
+async def toggle_soryn_sleep_web(request):
+    """Toggle Soryn sleep mode from Soryn panel"""
+    # Check Soryn authentication
+    if not check_soryn_auth(request):
+        raise web.HTTPFound('/STBS/login')
+    
+    global soryn_sleep
+    soryn_sleep = not soryn_sleep
+    
+    if soryn_sleep:
+        log_to_console("💤 Soryn sleep mode ENABLED via web panel", "WARNING")
+    else:
+        log_to_console("☀️ Soryn sleep mode DISABLED via web panel", "SUCCESS")
+    
+    # Redirect back to Soryn panel
+    raise web.HTTPFound('/STBS')
+
+
 async def start_web_server():
     """Start the web server"""
     app = web.Application()
@@ -2845,6 +2879,7 @@ async def start_web_server():
     app.router.add_post('/STBS/login', soryn_login_submit)
     app.router.add_get('/STBS/logout', soryn_logout)
     app.router.add_post('/STBS/toggle-maintenance', toggle_maintenance_mode)
+    app.router.add_post('/STBS/toggle-soryn-sleep', toggle_soryn_sleep_web)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -2857,6 +2892,59 @@ async def start_web_server():
 
 
 # ==================== BOT EVENTS ====================
+
+# Notification checker task
+@tasks.loop(minutes=1)
+async def notification_checker():
+    """Check for users who need party reminders"""
+    log_to_console("⏰ Notification checker running...", "DEBUG")
+    
+    # Check if party tracking is active
+    if not party_state.get('active'):
+        log_to_console("⏸️ Party tracking not active, skipping notifications", "DEBUG")
+        return
+    
+    # Check if we're in sleep mode
+    if party_state.get('sleep_until'):
+        now = datetime.now(timezone.utc)
+        if now < party_state['sleep_until']:
+            time_left = party_state['sleep_until'] - now
+            hours = int(time_left.total_seconds() // 3600)
+            minutes = int((time_left.total_seconds() % 3600) // 60)
+            log_to_console(
+                f"💤 Notifications skipped - sleeping for {hours}h {minutes}m more",
+                "DEBUG"
+            )
+            return
+        else:
+            # Wake up time has passed
+            log_to_console("☀️ Sleep time ended - resuming notifications", "SUCCESS")
+            party_state['sleep_until'] = None
+    
+    # Check if it's time to send reminder
+    now = datetime.now(timezone.utc)
+    next_party_time = party_state.get('next_party_time')
+    
+    if next_party_time and now >= next_party_time:
+        # Time to send notifications!
+        log_to_console("🔔 Party time reached! Sending notifications...", "INFO")
+        await send_party_reminder()
+        
+        # Reset party state for next cycle (3 hours)
+        party_state['next_party_time'] = now + timedelta(seconds=ROBO_PARTY_INTERVAL)
+        log_to_console(
+            f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            "INFO"
+        )
+
+
+@notification_checker.before_loop
+async def before_notification_checker():
+    """Wait for bot to be ready before starting notification checker"""
+    log_to_console("⏰ Notification checker waiting for bot to be ready...", "INFO")
+    await bot.wait_until_ready()
+    log_to_console("✅ Notification checker ready to start", "SUCCESS")
+
 
 @bot.event
 async def on_ready():
@@ -2881,6 +2969,12 @@ async def on_ready():
     
     await start_web_server()
     bot.loop.create_task(track_latency())
+    
+    # Start notification checker
+    if not notification_checker.is_running():
+        log_to_console("⏰ Starting notification checker task...", "INFO")
+        notification_checker.start()
+        log_to_console("✅ Notification checker task started", "SUCCESS")
     
     # Set bot presence to "Playing Bee Swarm Simulator"
     await bot.change_presence(
@@ -2923,34 +3017,6 @@ async def get_ping_users():
         ''')
         return [(row['user_id'], row['guild_id'], row['channel_id']) for row in rows]
 
-
-async def send_party_reminder():
-    """Send party reminder to channels"""
-    user_data = await get_ping_users()
-    log_to_console(f"Sending party reminders to {len(user_data)} users...", "INFO")
-    
-    success_count = 0
-    fail_count = 0
-    
-    for user_id, guild_id, channel_id in user_data:
-        try:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                await channel.send(
-                    f"<@{user_id}> 🤖🎉 **ROBO PARTY ALERT!** 🎉🤖\n\n"
-                    f"Your Robo Party is available in approximately 5 minutes!\n"
-                    f"Get ready to party! 🐝✨"
-                )
-                log_to_console(f"✅ Sent notification to user {user_id} in channel #{channel.name}", "SUCCESS")
-                success_count += 1
-            else:
-                log_to_console(f"❌ Channel {channel_id} not found for user {user_id}", "ERROR")
-                fail_count += 1
-        except Exception as e:
-            log_to_console(f"❌ Failed to send notification to channel {channel_id}: {e}", "ERROR")
-            fail_count += 1
-    
-    log_to_console(f"Party reminders complete: {success_count} sent, {fail_count} failed", "INFO")
 
 # 13. Fix the start_tracking command to use timezone-aware datetime:
 @bot.tree.command(name="start", description="Start tracking Robo Party")
@@ -3124,6 +3190,74 @@ async def sleep_command(
             "❌ Invalid input! Please check your numbers.",
             ephemeral=True
         )
+
+
+@bot.tree.command(name="help", description="View all available commands and how to use the bot")
+async def help_command(interaction: discord.Interaction):
+    """Show help information for users"""
+    embed = discord.Embed(
+        title="🐝 Bee Swarm Notifier - Help",
+        description="Track your Robo Party cooldowns and get reminded when it's ready!",
+        color=discord.Color.gold()
+    )
+    
+    embed.add_field(
+        name="📝 Getting Started",
+        value=(
+            "**1.** Ask an admin to add you: `/adduser @you`\n"
+            "**2.** Party will start automatically every 3 hours\n"
+            "**3.** You'll be pinged when your party is ready!"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎮 User Commands",
+        value=(
+            "`/start` - Start party tracking (if not active)\n"
+            "`/done` - Mark your party as complete\n"
+            "`/sleep` - Pause notifications temporarily\n"
+            "`/help` - Show this help message"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="💤 Sleep Mode",
+        value=(
+            "Pause notifications when you're away:\n"
+            "• `/sleep hours:2 minutes:30` - Sleep for duration\n"
+            "• `/sleep until:14:30` - Sleep until specific time (UTC)\n"
+            "• Bot auto-wakes when sleep time ends"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="⏰ Party Cooldown",
+        value=(
+            "• Parties occur every **3 hours**\n"
+            "• Notifications sent to your registered channel\n"
+            "• Use `/done` after completing your party"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="👑 Admin Commands",
+        value=(
+            "`/adduser @user` - Add user to party tracker\n"
+            "(Admin/Owner only)"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="🐝 Bee Swarm Notifier | Made by SorynTech")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    log_to_console(f"📖 Help command used by {interaction.user.name}", "INFO")
+
+
 # 10. UPDATE send_party_reminder to check sleep mode:
 async def send_party_reminder():
     """Send party reminder to channels"""
@@ -3155,9 +3289,7 @@ async def send_party_reminder():
             channel = bot.get_channel(channel_id)
             if channel:
                 await channel.send(
-                    f"<@{user_id}> 🤖🎉 **ROBO PARTY ALERT!** 🎉🤖\n\n"
-                    f"Your Robo Party is available in approximately 5 minutes!\n"
-                    f"Get ready to party! 🐝✨"
+                    f"<@{user_id}> Your robo Party is ready"
                 )
                 log_to_console(f"✅ Sent notification to user {user_id} in channel #{channel.name}", "SUCCESS")
                 success_count += 1
