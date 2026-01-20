@@ -125,12 +125,13 @@ async def init_db():
         log_to_console("Creating/verifying database tables...")
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS robo_party_users (
-                user_id BIGINT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
                 username TEXT,
-                guild_id BIGINT,
+                guild_id BIGINT NOT NULL,
                 channel_id BIGINT,
                 added_at TIMESTAMP DEFAULT NOW(),
-                is_active BOOLEAN DEFAULT TRUE
+                is_active BOOLEAN DEFAULT TRUE,
+                PRIMARY KEY (user_id, guild_id)
             )
         ''')
         
@@ -1926,11 +1927,12 @@ async def soryn_admin_panel(request):
     for user in users:
         if user['is_active']:
             user_id = user['user_id']
+            guild_id = user.get('guild_id')
             
-            # Check if this user has a party state and is sleeping
+            # Check if this user has a party state in their guild and is sleeping
             sleep_status = "Awake"
-            if user_id in user_party_states:
-                user_state = user_party_states[user_id]
+            if guild_id and (guild_id, user_id) in user_party_states:
+                user_state = user_party_states[(guild_id, user_id)]
                 if user_state.get('sleep_until'):
                     now = datetime.now(timezone.utc)
                     if now < user_state['sleep_until']:
@@ -2907,14 +2909,14 @@ async def start_web_server():
 # Notification checker task
 @tasks.loop(minutes=1)
 async def notification_checker():
-    """Check for users who need party reminders - per-user tracking"""
+    """Check for users who need party reminders - per-guild, per-user tracking"""
     log_to_console("⏰ Notification checker running...", "DEBUG")
     
     now = datetime.now(timezone.utc)
     notifications_sent = 0
     
-    # Check each user's party state
-    for user_id, state in list(user_party_states.items()):
+    # Check each user's party state (guild_id, user_id) tuples
+    for (guild_id, user_id), state in list(user_party_states.items()):
         # Check if user is in sleep mode
         if state.get('sleep_until'):
             if now < state['sleep_until']:
@@ -2922,7 +2924,7 @@ async def notification_checker():
                 continue
             else:
                 # Wake up time has passed
-                log_to_console(f"☀️ Sleep time ended for user {user_id}", "SUCCESS")
+                log_to_console(f"☀️ Sleep time ended for user {user_id} in guild {guild_id}", "SUCCESS")
                 state['sleep_until'] = None
         
         # Check if it's time to send reminder for this user
@@ -2935,34 +2937,34 @@ async def notification_checker():
                 conn = get_db_connection()
                 cur = conn.cursor()
                 cur.execute(
-                    'SELECT guild_id, channel_id FROM robo_party_users WHERE user_id = %s AND is_active = TRUE',
-                    (user_id,)
+                    'SELECT channel_id FROM robo_party_users WHERE user_id = %s AND guild_id = %s AND is_active = TRUE',
+                    (user_id, guild_id)
                 )
                 result = cur.fetchone()
                 cur.close()
                 return_db_connection(conn)
                 
                 if result:
-                    guild_id, channel_id = result
+                    channel_id = result[0]
                     channel = bot.get_channel(channel_id)
                     
                     if channel:
                         await channel.send(f"<@{user_id}> Your robo Party is ready")
-                        log_to_console(f"✅ Sent party notification to user {user_id}", "SUCCESS")
+                        log_to_console(f"✅ Sent party notification to user {user_id} in guild {guild_id}", "SUCCESS")
                         notifications_sent += 1
                         
                         # Schedule next party for this user (3 hours later)
                         state['next_party_time'] = now + timedelta(seconds=ROBO_PARTY_INTERVAL)
                         log_to_console(
-                            f"⏰ Next party for user {user_id}: {state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                            f"⏰ Next party for user {user_id} (guild {guild_id}): {state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}",
                             "INFO"
                         )
                     else:
                         log_to_console(f"❌ Channel {channel_id} not found for user {user_id}", "ERROR")
                 else:
-                    log_to_console(f"⚠️ User {user_id} not found in database or inactive", "WARNING")
+                    log_to_console(f"⚠️ User {user_id} not found in guild {guild_id} or inactive", "WARNING")
             except Exception as e:
-                log_to_console(f"❌ Error sending notification to user {user_id}: {e}", "ERROR")
+                log_to_console(f"❌ Error sending notification to user {user_id} in guild {guild_id}: {e}", "ERROR")
     
     if notifications_sent > 0:
         log_to_console(f"📬 Sent {notifications_sent} party notification(s) this cycle", "INFO")
@@ -3030,9 +3032,10 @@ async def track_latency():
 ROBO_PARTY_INTERVAL = 3 * 60 * 60  # 3 hours
 REMINDER_ADVANCE = 5 * 60  # 5 minutes
 
-# Per-user party tracking
+# Per-guild, per-user party tracking
 user_party_states = {}
-# Structure: {user_id: {'next_party_time': datetime, 'sleep_until': datetime}}
+# Structure: {(guild_id, user_id): {'next_party_time': datetime, 'sleep_until': datetime}}
+# This ensures each user in each server has their own independent tracking
 
 
 async def get_ping_users():
@@ -3046,20 +3049,54 @@ async def get_ping_users():
 
 
 # 13. Fix the start_tracking command to use timezone-aware datetime:
-@bot.tree.command(name="start", description="Start tracking your Robo Party")
+@bot.tree.command(name="start", description="Start tracking your Robo Party in this server")
 async def start_tracking(interaction: discord.Interaction):
-    """Start party tracking for this user"""
+    """Start party tracking for this user in this guild"""
     user_id = interaction.user.id
+    guild_id = interaction.guild_id
     
-    # Initialize or update this user's party state
-    if user_id not in user_party_states:
-        user_party_states[user_id] = {}
+    if not guild_id:
+        await interaction.response.send_message(
+            "❌ This command can only be used in a server!",
+            ephemeral=True
+        )
+        return
+    
+    # Check if user has been added via /adduser first
+    async with db_pool.acquire() as conn:
+        result = await conn.fetchrow(
+            'SELECT channel_id, is_active FROM robo_party_users WHERE user_id = $1 AND guild_id = $2',
+            user_id, guild_id
+        )
+    
+    if not result:
+        await interaction.response.send_message(
+            "⚠️ You need to be added to the party tracker first!\n"
+            "Ask an admin to run `/adduser @you #channel`",
+            ephemeral=True
+        )
+        return
+    
+    if not result['is_active']:
+        await interaction.response.send_message(
+            "⚠️ Your party tracking has been deactivated.\n"
+            "Ask an admin to re-add you with `/adduser`",
+            ephemeral=True
+        )
+        return
+    
+    # Use composite key (guild_id, user_id)
+    key = (guild_id, user_id)
+    
+    # Initialize or update this user's party state in this guild
+    if key not in user_party_states:
+        user_party_states[key] = {}
     
     next_party = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
-    user_party_states[user_id]['next_party_time'] = next_party
-    user_party_states[user_id]['sleep_until'] = None
+    user_party_states[key]['next_party_time'] = next_party
+    user_party_states[key]['sleep_until'] = None
     
-    log_to_console(f"▶️ Party tracking started by {interaction.user.name} (ID: {user_id})", "INFO")
+    log_to_console(f"▶️ Party tracking started by {interaction.user.name} (ID: {user_id}) in guild {interaction.guild.name} (ID: {guild_id})", "INFO")
     log_to_console(f"⏰ Next party scheduled for: {next_party.strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
@@ -3070,26 +3107,36 @@ async def start_tracking(interaction: discord.Interaction):
     )
 
 # 14. Fix party_done command:
-@bot.tree.command(name="done", description="Mark your party as complete")
+@bot.tree.command(name="done", description="Mark your party as complete in this server")
 async def party_done(interaction: discord.Interaction):
-    """Mark party complete for this user"""
+    """Mark party complete for this user in this guild"""
     user_id = interaction.user.id
+    guild_id = interaction.guild_id
     
-    # Check if user has an active party state
-    if user_id not in user_party_states:
+    if not guild_id:
         await interaction.response.send_message(
-            "⚠️ You haven't started party tracking yet! Use `/start` first.",
+            "❌ This command can only be used in a server!",
             ephemeral=True
         )
         return
     
-    log_to_console(f"✅ Party marked complete by {interaction.user.name} (ID: {user_id})", "SUCCESS")
+    key = (guild_id, user_id)
     
-    # Schedule next party for this user
+    # Check if user has an active party state in this guild
+    if key not in user_party_states:
+        await interaction.response.send_message(
+            "⚠️ You haven't started party tracking in this server yet! Use `/start` first.",
+            ephemeral=True
+        )
+        return
+    
+    log_to_console(f"✅ Party marked complete by {interaction.user.name} (ID: {user_id}) in guild {interaction.guild.name}", "SUCCESS")
+    
+    # Schedule next party for this user in this guild
     next_party = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
-    user_party_states[user_id]['next_party_time'] = next_party
+    user_party_states[key]['next_party_time'] = next_party
     
-    log_to_console(f"⏰ Next party for user {user_id}: {next_party.strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
+    log_to_console(f"⏰ Next party for user {user_id} in guild {guild_id}: {next_party.strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
         f"✅ **Party Complete!**\n\nNext party: <t:{int(next_party.timestamp())}:R>",
@@ -3105,26 +3152,27 @@ async def add_user(interaction: discord.Interaction, user: discord.User, channel
         await interaction.response.send_message("⚠️ Admin only!", ephemeral=True)
         return
     
-    log_to_console(f"📝 Adding user {user.name} ({user.id}) to notifications in #{channel.name}", "INFO")
+    log_to_console(f"📝 Adding user {user.name} ({user.id}) to notifications in #{channel.name} (guild {interaction.guild_id})", "INFO")
     
     async with db_pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO robo_party_users (user_id, username, guild_id, channel_id)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id) 
-            DO UPDATE SET username = $2, guild_id = $3, channel_id = $4, is_active = TRUE
+            INSERT INTO robo_party_users (user_id, username, guild_id, channel_id, is_active)
+            VALUES ($1, $2, $3, $4, TRUE)
+            ON CONFLICT (user_id, guild_id) 
+            DO UPDATE SET username = $2, channel_id = $4, is_active = TRUE
         ''', user.id, str(user), interaction.guild_id, channel.id)
     
-    log_to_console(f"✅ User {user.name} added - will be notified in #{channel.name} on server {interaction.guild.name}", "SUCCESS")
+    log_to_console(f"✅ User {user.name} added to guild {interaction.guild.name} - will be notified in #{channel.name}", "SUCCESS")
     
     await interaction.response.send_message(
-        f"✅ {user.mention} will be notified in {channel.mention}!",
+        f"✅ {user.mention} added to party tracker in {channel.mention}!\n"
+        f"They need to run `/start` to begin tracking.",
         ephemeral=True
     )
 
 # 9. ADD THE /sleep COMMAND - Add this after the party_done command:
 
-@bot.tree.command(name="sleep", description="Pause your party notifications until a specified time")
+@bot.tree.command(name="sleep", description="Pause your party notifications in this server until a specified time")
 @app_commands.describe(
     hours="Number of hours to sleep (optional)",
     minutes="Number of minutes to sleep (optional)",
@@ -3136,13 +3184,23 @@ async def sleep_command(
     minutes: int = 0,
     until: str = None
 ):
-    """Put party tracker to sleep for this user"""
+    """Put party tracker to sleep for this user in this guild"""
     user_id = interaction.user.id
+    guild_id = interaction.guild_id
     
-    # Check if user has started tracking
-    if user_id not in user_party_states:
+    if not guild_id:
         await interaction.response.send_message(
-            "⚠️ You haven't started party tracking yet! Use `/start` first.",
+            "❌ This command can only be used in a server!",
+            ephemeral=True
+        )
+        return
+    
+    key = (guild_id, user_id)
+    
+    # Check if user has started tracking in this guild
+    if key not in user_party_states:
+        await interaction.response.send_message(
+            "⚠️ You haven't started party tracking in this server yet! Use `/start` first.",
             ephemeral=True
         )
         return
@@ -3175,13 +3233,13 @@ async def sleep_command(
             if wake_time <= now:
                 wake_time += timedelta(days=1)
             
-            user_party_states[user_id]['sleep_until'] = wake_time
+            user_party_states[key]['sleep_until'] = wake_time
             time_until_wake = wake_time - now
             hours_until = int(time_until_wake.total_seconds() // 3600)
             minutes_until = int((time_until_wake.total_seconds() % 3600) // 60)
             
             log_to_console(
-                f"💤 Sleep mode activated by {interaction.user.name} (ID: {user_id}) until {wake_time.strftime('%H:%M UTC')} "
+                f"💤 Sleep mode activated by {interaction.user.name} (ID: {user_id}) in guild {guild_id} until {wake_time.strftime('%H:%M UTC')} "
                 f"({hours_until}h {minutes_until}m)",
                 "INFO"
             )
@@ -3198,10 +3256,10 @@ async def sleep_command(
             # Calculate sleep duration
             sleep_duration = timedelta(hours=hours, minutes=minutes)
             wake_time = datetime.now(timezone.utc) + sleep_duration
-            user_party_states[user_id]['sleep_until'] = wake_time
+            user_party_states[key]['sleep_until'] = wake_time
             
             log_to_console(
-                f"💤 Sleep mode activated by {interaction.user.name} (ID: {user_id}) for {hours}h {minutes}m",
+                f"💤 Sleep mode activated by {interaction.user.name} (ID: {user_id}) in guild {guild_id} for {hours}h {minutes}m",
                 "INFO"
             )
             
