@@ -1,449 +1,347 @@
-# SorynTech Bot Suite 🤖
+# 🐝 Bee Swarm Notifier
 
-A comprehensive Discord bot suite featuring Robo Party tracking with an advanced cyberpunk-themed admin panel and real-time system monitoring.
+**Automatic Robo Party tracking and notifications for Bee Swarm Simulator**
 
-## 🌐 Admin Panel Features
-
-The bot includes a futuristic cyberpunk-themed web admin panel that displays real-time system status:
-
-### Normal Status - "SorynTech Bot Suite - Online" 🟢
-- Cyberpunk theme with animated particles
-- Green/cyan color scheme with neon glow effects
-- **Discord Status**: 🟢 Online
-- **HTTP Status**: 200 OK
-- Displays:
-  - **System Uptime** (Time bot has been running)
-  - **Bot Latency** (Current ping in milliseconds)
-  - **Server Count** (Number of Discord servers)
-  - **Server Time** (Current UTC time from bot's server)
-  - **📊 Latency Monitor Graph** (Real-time 60-second latency history with animated visualization)
-- **Auto-refresh**: Page refreshes every 30 seconds
-- **GitHub Button**: Links to your GitHub profile
-
-### Update Mode - "System Update - Maintenance" 🟡
-- Orange/amber maintenance theme with rotating gears
-- Animated gear icons across the screen
-- **Discord Status**: 🟡 Idle (yellow/orange status)
-- **HTTP Status**: 503 Service Unavailable
-- **Bot remains fully functional** - only status page changes
-- Message: "Bot is performing maintenance operations"
-- Shows uptime and server time
-- **GitHub Button**: Links to your GitHub profile
-- **Activation**: Hidden command `!updating` (only works for user ID 447812883158532106)
-
-All admin pages feature:
-- Animated background effects (particles, gears)
-- Glowing neon text and borders
-- Real-time statistics
-- Responsive design for mobile and desktop
-- Custom animations and visual effects
-- **GitHub profile link button** on every page
-- Automatic table creation on first run
+Part of the SorynTech Bot Suite 🦈
 
 ---
 
-## 🎮 Command Categories
+## Features
 
-### 🎉 Robo Party Commands
-| Command | Description | Required Permission |
-|---------|-------------|---------------------|
-| `/start` | Start tracking Robo Party (3-hour intervals) | None |
-| `/done` | Mark party as complete and schedule next | None |
-| `/adduser @user` | Add a user to receive party reminders | Administrator |
+### 🎮 For Users
+- **Automatic Party Reminders** - Get pinged every 3 hours when your Robo Party is ready
+- **Sleep Mode** - Pause notifications when you're away or sleeping
+- **Simple Commands** - Easy-to-use slash commands
+- **Help System** - `/help` shows all available commands
 
-### 👑 Owner-Only Commands
-| Command | Description | Activation Method |
-|---------|-------------|-------------------|
-| `!updating` | Toggle update mode on/off | Hidden text command (Owner ID: 447812883158532106) |
+### 👑 For Admins
+- **User Management** - Add users to the party tracker
+- **Web Dashboard** - Monitor bot status and statistics
+- **Party Control** - Start/stop party tracking system
 
----
-
-## ✅ Implemented Features
-
-### Core Bot Features (3)
-- [x] `/start` - Start Robo Party tracking with 3-hour intervals
-- [x] `/done` - Mark party complete and schedule next one
-- [x] `/adduser` - Add users to party notification system (Admin only)
-
-### Owner Controls (1)
-- [x] `!updating` - Toggle update mode remotely from any server with the bot
-
-### Admin Panel (8 Features)
-- [x] Real-time uptime display
-- [x] Live latency monitoring with graph
-- [x] Server count statistics
-- [x] Server time display (UTC)
-- [x] **Latency history graph** (60-second rolling window)
-- [x] Update mode with Discord Idle status
-- [x] Auto-refresh every 30 seconds
-- [x] GitHub profile integration
-
-### Technical Features (5)
-- [x] **Automatic database table creation** on first run
-- [x] Supabase PostgreSQL integration with connection pooling
-- [x] Environment variable configuration (.env)
-- [x] Embedded web server (aiohttp) in main.py
-- [x] Discord status changes (Online/Idle based on mode)
+### 🦈 For Owner (Soryn)
+- **Soryn Backend Panel** - Full control at `/STBS`
+- **Maintenance Mode** - Pause bot updates with one click
+- **Sleep Mode Toggle** - Show availability status to admins
+- **Real-time Monitoring** - Track all bot activity
 
 ---
 
-## 🚧 Planned Features
+## Quick Start
 
-### Robo Party Enhancements
-- [ ] `/sleep <hours> <minutes>` - Pause tracking temporarily
-- [ ] `/status` - Check current party status
-- [ ] `/listusers` - List all users receiving reminders
-- [ ] `/removeuser @user` - Remove user from reminders
+### User Setup
+1. Ask an admin to add you: `/adduser @you`
+2. Party tracking starts automatically
+3. You'll be pinged every 3 hours: "@You Your robo Party is ready"
+4. After completing your party, run `/done`
 
-### Admin Panel Enhancements
-- [ ] User management interface
-- [ ] Party history timeline
-- [ ] Advanced statistics and charts
-- [ ] System health monitoring
-- [ ] Database query interface
-
-### Additional Owner Commands
-- [ ] Emergency shutdown mode
-- [ ] Restart command
-- [ ] Sleep mode toggle
-- [ ] Advanced diagnostics
+### Admin Setup
+1. Add users: `/adduser @user`
+2. Start tracking: `/start`
+3. Monitor via web dashboard: `/dashboard`
 
 ---
 
-## 🎨 Key Features
+## Commands
 
-### Admin Panel Aesthetics
-- **Endpoint**: `http://your-bot-url/` or `http://your-bot-url/health`
-- **Theme**: Cyberpunk/futuristic with neon green and orange accents
-- **Real-time Updates**: Auto-refreshes every 30 seconds
-- **Multiple States**: Normal (green) and Update (orange/amber)
-- **Animated Effects**: Floating particles, rotating gears, glowing elements
-- **GitHub Integration**: Direct link to developer profile
-- **HTTP Status Codes**: 
-  - Normal: 200 OK
-  - Update Mode: 503 Service Unavailable
+### User Commands
+- `/help` - Show all available commands and usage
+- `/done` - Mark your party as complete
+- `/sleep` - Pause notifications temporarily
+  - `/sleep hours:2 minutes:30` - Sleep for a duration
+  - `/sleep until:14:30` - Sleep until specific time (UTC)
 
-### Discord Presence Status
-The bot automatically changes its Discord status:
-- **🟢 Online**: Normal operation (green)
-- **🟡 Idle**: Update mode (yellow/orange)
+### Admin Commands
+- `/start` - Start party tracking (if not active)
+- `/adduser @user` - Add user to party tracker
+- Access dashboard at `/dashboard` (login required)
 
-### Robo Party System
-- **Interval**: Every 3 hours
-- **Reminders**: 5 minutes before party is ready
-- **Multi-User**: Support for multiple notification recipients
-- **Main User**: Pre-configured (ID: 581677161006497824)
-- **Tracking**: Complete party history in database
-
-### Database Features
-- **Auto-Creation**: Tables created automatically on first run
-- **Connection Pooling**: Efficient Supabase PostgreSQL integration
-- **Tables**:
-  - `robo_party_users` - User registration and notification settings
-  - `party_history` - Complete log of all parties completed
-  - `admin_users` - Admin authentication (for future features)
-
-### Latency Monitoring
-- **Real-time Graph**: Displays last 60 latency measurements
-- **Animated Canvas**: Custom-drawn graph with glow effects
-- **Auto-updating**: New measurements every 30 seconds
-- **Visual Design**: Cyberpunk-themed with green neon lines
-
-### Security Features
-- Owner-only commands (user ID: 447812883158532106)
-- Hidden command syntax for sensitive operations
-- Administrator permission checks
-- Environment variable configuration
+### Owner Commands
+- `!soryn-sleep` - Toggle Soryn sleep mode (Discord)
+- Web panel sleep toggle button (Soryn backend)
+- Maintenance mode toggle (Soryn backend)
 
 ---
 
-## 📊 Progress Statistics
-- **Completed:** 17 features
-- **In Progress:** 0 features
-- **Planned:** 13 features
-- **Total Roadmap:** 30 features
+## Web Dashboard
+
+### Public Routes
+- `/` - Redirects to dashboard
+- `/health` - Public health check
+
+### Admin Dashboard (`/dashboard`)
+**Login Required**
+- Bot statistics and uptime
+- User tracking status
+- Active users count
+- Real-time monitoring
+
+### Soryn Backend (`/STBS`)
+**Owner Only**
+- Full system control
+- Maintenance mode toggle
+- Soryn sleep mode toggle
+- Advanced statistics
+- Active users with profile pictures
+- Notification statistics
 
 ---
 
-## 🛠️ Technical Details
+## Technical Details
 
-### Built With
-- **discord.py** - Discord API wrapper for bot functionality
-- **aiohttp** - Embedded web server for admin panel
-- **asyncpg** - PostgreSQL async driver with connection pooling
-- **Python 3.9+** - Modern async Python
-- **Supabase** - PostgreSQL database hosting
+### Party System
+- **Cooldown:** 3 hours between parties
+- **Notification:** "@User Your robo Party is ready"
+- **Auto-scheduling:** Automatically sets next party time
+- **Sleep support:** Pause notifications via `/sleep`
+
+### Notification System
+- Checks every 1 minute for pending notifications
+- Sends to user's registered channel
+- Respects sleep mode settings
+- Auto-resumes after sleep ends
+
+### Sleep Modes
+**User Sleep Mode:**
+- Command: `/sleep`
+- Pauses party notifications
+- Auto-wakes when time expires
+- Per-user setting
+
+**Soryn Sleep Mode:**
+- Command: `!soryn-sleep` or web button
+- Shows banner on admin panel
+- Visual indicator only
+- Does not affect notifications
+
+---
+
+## Database
+
+### Tables
+- `robo_party_users` - User tracking and channel assignments
+- Stores: user_id, guild_id, channel_id, is_active
+
+### Features
+- PostgreSQL database
+- Connection pooling
+- Automatic migrations
+- Data persistence
+
+---
+
+## Installation
 
 ### Requirements
-- Python 3.9 or higher
-- Discord Bot Token
-- Supabase PostgreSQL database
-- Bot Permissions:
-  - Send Messages
-  - Read Message History
-  - Manage Messages (optional, for future features)
+```
+discord.py >= 2.0.0
+aiohttp
+asyncpg
+python-dotenv
+```
 
-### Configuration
-The bot uses environment variables stored in a `.env` file:
+### Environment Variables
 ```env
 DISCORD_TOKEN=your_bot_token_here
-DISCORD_CLIENT_ID=your_client_id_here
-DATABASE_URL=postgresql://user:password@db.your-project.supabase.co:6543/postgres?pgbouncer=true
+DATABASE_URL=your_postgresql_url_here
 PORT=10000
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=secure_password
+SORYN_USERNAME=soryn
+SORYN_PASSWORD=secure_password
+SORYN_IP=optional_ip_whitelist
 ```
 
-### Database Schema
-The bot automatically creates these tables on first run:
-
-```sql
--- User notification settings
-CREATE TABLE robo_party_users (
-    user_id BIGINT PRIMARY KEY,
-    username TEXT,
-    added_at TIMESTAMP DEFAULT NOW(),
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- Party completion history
-CREATE TABLE party_history (
-    id SERIAL PRIMARY KEY,
-    completed_at TIMESTAMP DEFAULT NOW(),
-    completed_by BIGINT
-);
-
--- Admin authentication (for future features)
-CREATE TABLE admin_users (
-    user_id BIGINT PRIMARY KEY,
-    username TEXT,
-    password_hash TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-### Admin Panel Access
-Once the bot is running, access the admin panel at:
-- `http://localhost:10000/` (local development)
-- `http://your-deployment-url/` (production - e.g., Render)
+### Setup
+1. Install dependencies: `pip install -r requirements.txt`
+2. Create `.env` file with your credentials
+3. Run the bot: `python main.py`
+4. Enable intents in Discord Developer Portal:
+   - Server Members Intent
+   - Presence Intent
+   - Message Content Intent
 
 ---
 
-## 🚀 Setup Instructions
+## Configuration
 
-### Prerequisites
-- Python 3.9+
-- PostgreSQL database (Supabase recommended)
-- Discord Bot Token
-
-### 1. Clone the Repository
-```bash
-git clone <your-repo-url>
-cd soryntech-bot-suite
+### Party Interval
+```python
+ROBO_PARTY_INTERVAL = 3 * 60 * 60  # 3 hours
 ```
 
-### 2. Install Dependencies
-```bash
-pip install -r requirements.txt
+### Status Check Frequency
+```python
+await asyncio.sleep(120)  # Every 2 minutes
 ```
 
-### 3. Set Up Supabase Database
-
-1. Create a Supabase project at https://supabase.com
-2. Get your connection string from Settings → Database
-3. Use the **connection pooling** URL (port 6543) for better performance
-4. **Tables will be created automatically** on first run!
-
-### 4. Create Discord Bot
-
-1. Go to https://discord.com/developers/applications
-2. Click "New Application"
-3. Go to "Bot" section and create a bot
-4. Enable these Privileged Gateway Intents:
-   - ✅ Server Members Intent
-   - ✅ Message Content Intent
-5. Copy the bot token and Client ID
-6. Go to OAuth2 → URL Generator
-7. Select scopes: `bot`, `applications.commands`
-8. Select bot permissions: `Send Messages`, `Read Message History`
-9. Use the generated URL to invite the bot to your server
-
-### 5. Configure Environment Variables
-
-Create a `.env` file in the root directory:
-
-```bash
-cp .env.example .env
+### Notification Check
+```python
+@tasks.loop(minutes=1)  # Every 1 minute
 ```
-
-Edit `.env` and add your credentials:
-
-```env
-DISCORD_TOKEN=your_discord_bot_token_here
-DISCORD_CLIENT_ID=your_client_id_here
-DATABASE_URL=postgresql://user:password@db.your-project.supabase.co:6543/postgres?pgbouncer=true
-PORT=10000
-```
-
-### 6. Run the Bot
-
-```bash
-python main.py
-```
-
-The bot will:
-1. Connect to Discord
-2. Create database tables automatically
-3. Start the web server on port 10000
-4. Sync slash commands
-5. Begin tracking latency
-
-### 7. Access Admin Panel
-
-Open your browser and go to:
-- Local: `http://localhost:10000`
-- Production: `http://your-deployment-url`
 
 ---
 
-## 📝 Usage Examples
+## Features Breakdown
 
-### Starting Robo Party Tracking
-```
-/start
-```
-Response: "🐝 Robo Party Tracker Started! Next party in approximately 3 hours."
+### v2.1 Features
+✅ Presences intent for user status tracking
+✅ Global display names (not server nicknames)
+✅ Avatar URLs in Active Users section
+✅ Bot status: "Playing Bee Swarm Simulator"
+✅ Separated stats: Active Users + Notified Users
+✅ Active Users section with profile pictures
+✅ Sleep status indicators
+✅ Reduced status checks (every 2 minutes)
+✅ Soryn sleep mode with web toggle
+✅ `/help` command for users
+✅ Automatic notification system
+✅ Clean notification message
 
-### Completing a Party
-```
-/done
-```
-Response: "✅ Party Complete! Next party in 3 hours! 🎉"
-
-### Adding a User (Admin Only)
-```
-/adduser @friend
-```
-Response: "✅ @friend added to party reminders!"
-
-### Toggle Update Mode (Owner Only)
-In your Discord server with the bot:
-```
-!updating
-```
-Response: "✅ Update mode **ENABLED** - Status page updated"
-
-Run again to disable:
-```
-!updating
-```
-Response: "✅ Update mode **DISABLED** - Back to normal"
+### v2.0 Features (Base)
+✅ Channel-based notifications
+✅ Soryn backend panel with shark theme
+✅ Database migration support
+✅ Dual authentication system
+✅ Maintenance mode
+✅ `/sleep` command for notifications
+✅ Full rebranding to "Bee Swarm Notifier"
 
 ---
 
-## 🎯 Main User Configuration
+## Web Interface
 
-The bot is pre-configured with the main user:
-- **User ID**: `581677161006497824`
-- **Auto-added**: This user is automatically added to the database on first run
-- **Notifications**: Will receive all Robo Party reminders
+### Login Page
+- Shark-themed background with swimming rats
+- Secure authentication
+- Session management
 
----
+### Admin Dashboard
+- Clean, modern UI
+- Real-time statistics
+- User status monitoring
+- Soryn sleep banner (when active)
 
-## 🔧 Deployment
-
-### Deploying to Render
-
-1. Create a new Web Service on Render
-2. Connect your GitHub repository
-3. Configure:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python main.py`
-4. Add environment variables:
-   - `DISCORD_TOKEN`
-   - `DISCORD_CLIENT_ID`
-   - `DATABASE_URL`
-   - `PORT` (Render provides this automatically)
-5. Deploy!
-
-### Deploying to Other Platforms
-
-The bot works on any platform that supports:
-- Python 3.9+
-- Long-running processes
-- Environment variables
-- HTTP server on a specific port
-
-Compatible with:
-- Heroku
-- Railway
-- DigitalOcean
-- AWS EC2
-- Google Cloud Run
-- Any VPS with Python
+### Soryn Backend
+- Rat favicon and theme
+- Advanced controls
+- Maintenance toggle
+- Sleep mode toggle
+- Active users with avatars
+- Rarity distribution (from previous features)
 
 ---
 
-## 🔄 Recent Updates
+## Security
 
-### January 18, 2026 (LATEST)
-- 🎨 Created cyberpunk-themed admin panel with neon effects
-- 📊 Added real-time latency monitoring graph (60-second history)
-- 🔧 Implemented `!updating` command for remote update mode toggle
-- 🟡 Discord status changes to Idle when in update mode
-- ⚙️ Automatic database table creation on first run
-- 📈 Auto-refresh admin panel every 30 seconds
-- 🎯 Integrated all features into single main.py file
-- 🔗 Added GitHub profile button to all status pages
-- ✨ Animated particle and gear effects on status pages
+### Authentication
+- HTTP Basic Auth for admin dashboard
+- Separate Soryn credentials for backend
+- Session-based login system
+- IP whitelist option for Soryn backend
 
----
-
-## 📝 Notes
-
-- **Owner ID** is hardcoded: `447812883158532106`
-- **Main User ID** is hardcoded: `581677161006497824`
-- All slash commands sync automatically on bot startup
-- Database tables created automatically - no manual setup needed
-- `!updating` command is hidden (no slash command, no help text)
-- Admin panel accessible at root URL (`/` or `/health`)
-- Bot status changes automatically based on mode
-- **Everything runs from main.py** - no separate files needed
-- Latency tracked every 30 seconds for graph display
-- Connection pooling enabled for database efficiency
+### Password Protection
+- SHA-256 password hashing
+- Environment variable storage
+- No hardcoded credentials
 
 ---
 
-## 🤝 Contributing
+## Logging
 
-This is a personal project by SorynTech. If you have suggestions or find bugs, feel free to reach out!
+### Console Output
+All actions are logged with timestamps and levels:
+- `SUCCESS` - Green: Successful operations
+- `INFO` - Blue: General information
+- `WARNING` - Yellow: Important notices
+- `ERROR` - Red: Errors and failures
+- `DEBUG` - Gray: Detailed debugging
 
-**GitHub**: https://github.com/soryntech
-
----
-
-## 📄 License
-
-MIT License
-
-Copyright (c) 2026 SorynTech
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+### Log Examples
+```
+[2026-01-20 12:00:00 UTC] [INFO] ⏰ Notification checker running...
+[2026-01-20 15:00:00 UTC] [INFO] 🔔 Party time reached! Sending notifications...
+[2026-01-20 15:00:01 UTC] [SUCCESS] ✅ Sent notification to user 123456
+```
 
 ---
 
-**Made with 💚 by SorynTech** 🤖
+## Deployment
+
+### Render.com
+- Automatic deployment from GitHub
+- PostgreSQL database included
+- Environment variables in dashboard
+- Automatic health checks
+
+### Port Configuration
+Default: `10000`
+Override: Set `PORT` environment variable
+
+---
+
+## Support
+
+### Common Issues
+
+**Notifications not sending:**
+- Check if party tracking is active (`/start`)
+- Verify user is added (`/adduser @user`)
+- Check sleep mode status
+- Review console logs
+
+**Bot offline:**
+- Check Discord token is valid
+- Verify intents are enabled in Developer Portal
+- Check database connection
+
+**Web dashboard not loading:**
+- Verify PORT is correct
+- Check admin credentials
+- Ensure web server started (console logs)
+
+---
+
+## Credits
+
+**Developer:** SorynTech
+**Version:** 2.1
+**Discord Bot:** Bee Swarm Notifier
+**Backend Theme:** Rat (🐀)
+**Frontend Theme:** Bee (🐝)
+
+---
+
+## License
+
+Private bot for personal use.
+
+---
+
+## Changelog
+
+### v2.1 (Latest)
+- Added automatic notification system (checks every minute)
+- Added `/help` command for users
+- Updated notification message: "@User Your robo Party is ready"
+- Added Soryn sleep mode web toggle button
+- Implemented presences intent for user status
+- Added global display names support
+- Added avatar URLs to Active Users section
+- Changed bot status to "Playing Bee Swarm Simulator"
+- Split stats cards: Active Users (count) + Notified Users (X/Y)
+- Reduced status checks from 30s to 2 minutes
+- Confirmed 3-hour party interval
+
+### v2.0
+- Initial Bee Swarm Notifier release
+- Channel-based notifications
+- Soryn backend panel
+- Database system
+- Web dashboard
+- Sleep command
+- Party tracking system
+
+---
+
+**Made with 🦈 by SorynTech**
