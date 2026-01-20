@@ -2896,46 +2896,65 @@ async def start_web_server():
 # Notification checker task
 @tasks.loop(minutes=1)
 async def notification_checker():
-    """Check for users who need party reminders"""
+    """Check for users who need party reminders - per-user tracking"""
     log_to_console("⏰ Notification checker running...", "DEBUG")
     
-    # Check if party tracking is active
-    if not party_state.get('active'):
-        log_to_console("⏸️ Party tracking not active, skipping notifications", "DEBUG")
-        return
-    
-    # Check if we're in sleep mode
-    if party_state.get('sleep_until'):
-        now = datetime.now(timezone.utc)
-        if now < party_state['sleep_until']:
-            time_left = party_state['sleep_until'] - now
-            hours = int(time_left.total_seconds() // 3600)
-            minutes = int((time_left.total_seconds() % 3600) // 60)
-            log_to_console(
-                f"💤 Notifications skipped - sleeping for {hours}h {minutes}m more",
-                "DEBUG"
-            )
-            return
-        else:
-            # Wake up time has passed
-            log_to_console("☀️ Sleep time ended - resuming notifications", "SUCCESS")
-            party_state['sleep_until'] = None
-    
-    # Check if it's time to send reminder
     now = datetime.now(timezone.utc)
-    next_party_time = party_state.get('next_party_time')
+    notifications_sent = 0
     
-    if next_party_time and now >= next_party_time:
-        # Time to send notifications!
-        log_to_console("🔔 Party time reached! Sending notifications...", "INFO")
-        await send_party_reminder()
+    # Check each user's party state
+    for user_id, state in list(user_party_states.items()):
+        # Check if user is in sleep mode
+        if state.get('sleep_until'):
+            if now < state['sleep_until']:
+                # Still sleeping, skip this user
+                continue
+            else:
+                # Wake up time has passed
+                log_to_console(f"☀️ Sleep time ended for user {user_id}", "SUCCESS")
+                state['sleep_until'] = None
         
-        # Reset party state for next cycle (3 hours)
-        party_state['next_party_time'] = now + timedelta(seconds=ROBO_PARTY_INTERVAL)
-        log_to_console(
-            f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}",
-            "INFO"
-        )
+        # Check if it's time to send reminder for this user
+        next_party_time = state.get('next_party_time')
+        
+        if next_party_time and now >= next_party_time:
+            # Time to send notification to this user!
+            try:
+                # Get user's channel from database
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    'SELECT guild_id, channel_id FROM robo_party_users WHERE user_id = %s AND is_active = TRUE',
+                    (user_id,)
+                )
+                result = cur.fetchone()
+                cur.close()
+                return_db_connection(conn)
+                
+                if result:
+                    guild_id, channel_id = result
+                    channel = bot.get_channel(channel_id)
+                    
+                    if channel:
+                        await channel.send(f"<@{user_id}> Your robo Party is ready")
+                        log_to_console(f"✅ Sent party notification to user {user_id}", "SUCCESS")
+                        notifications_sent += 1
+                        
+                        # Schedule next party for this user (3 hours later)
+                        state['next_party_time'] = now + timedelta(seconds=ROBO_PARTY_INTERVAL)
+                        log_to_console(
+                            f"⏰ Next party for user {user_id}: {state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                            "INFO"
+                        )
+                    else:
+                        log_to_console(f"❌ Channel {channel_id} not found for user {user_id}", "ERROR")
+                else:
+                    log_to_console(f"⚠️ User {user_id} not found in database or inactive", "WARNING")
+            except Exception as e:
+                log_to_console(f"❌ Error sending notification to user {user_id}: {e}", "ERROR")
+    
+    if notifications_sent > 0:
+        log_to_console(f"📬 Sent {notifications_sent} party notification(s) this cycle", "INFO")
 
 
 @notification_checker.before_loop
@@ -3000,12 +3019,9 @@ async def track_latency():
 ROBO_PARTY_INTERVAL = 3 * 60 * 60  # 3 hours
 REMINDER_ADVANCE = 5 * 60  # 5 minutes
 
-party_state = {
-    'active': False,
-    'next_party_time': None,
-    'sleep_until': None,
-    'reminder_sent': False
-}
+# Per-user party tracking
+user_party_states = {}
+# Structure: {user_id: {'next_party_time': datetime, 'sleep_until': datetime}}
 
 
 async def get_ping_users():
@@ -3019,51 +3035,56 @@ async def get_ping_users():
 
 
 # 13. Fix the start_tracking command to use timezone-aware datetime:
-@bot.tree.command(name="start", description="Start tracking Robo Party")
+@bot.tree.command(name="start", description="Start tracking your Robo Party")
 async def start_tracking(interaction: discord.Interaction):
-    """Start party tracking"""
-    party_state['active'] = True
-    party_state['next_party_time'] = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
-    party_state['reminder_sent'] = False
+    """Start party tracking for this user"""
+    user_id = interaction.user.id
     
-    log_to_console(f"▶️ Party tracking started by {interaction.user.name} in {interaction.guild.name}", "INFO")
-    log_to_console(f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
+    # Initialize or update this user's party state
+    if user_id not in user_party_states:
+        user_party_states[user_id] = {}
+    
+    next_party = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
+    user_party_states[user_id]['next_party_time'] = next_party
+    user_party_states[user_id]['sleep_until'] = None
+    
+    log_to_console(f"▶️ Party tracking started by {interaction.user.name} (ID: {user_id})", "INFO")
+    log_to_console(f"⏰ Next party scheduled for: {next_party.strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
-        f"🐝 **Robo Party Tracker Started!**\n\n"
-        f"Next party in approximately 3 hours.\n"
-        f"You'll be pinged 5 minutes before!",
+        f"🐝 **Your Robo Party Tracker Started!**\n\n"
+        f"Next party: <t:{int(next_party.timestamp())}:R>\n"
+        f"You'll be pinged when it's ready!",
         ephemeral=True
     )
 
 # 14. Fix party_done command:
-@bot.tree.command(name="done", description="Mark party as complete")
+@bot.tree.command(name="done", description="Mark your party as complete")
 async def party_done(interaction: discord.Interaction):
-    """Mark party complete"""
-    if not party_state['active']:
+    """Mark party complete for this user"""
+    user_id = interaction.user.id
+    
+    # Check if user has an active party state
+    if user_id not in user_party_states:
         await interaction.response.send_message(
-            "⚠️ Party tracking not active! Use `/start` first.",
+            "⚠️ You haven't started party tracking yet! Use `/start` first.",
             ephemeral=True
         )
         return
     
-    log_to_console(f"✅ Party marked complete by {interaction.user.name}", "SUCCESS")
+    log_to_console(f"✅ Party marked complete by {interaction.user.name} (ID: {user_id})", "SUCCESS")
     
-    async with db_pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO party_history (completed_by, guild_id)
-            VALUES ($1, $2)
-        ''', interaction.user.id, interaction.guild_id)
+    # Schedule next party for this user
+    next_party = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
+    user_party_states[user_id]['next_party_time'] = next_party
     
-    party_state['next_party_time'] = datetime.now(timezone.utc) + timedelta(seconds=ROBO_PARTY_INTERVAL)
-    party_state['reminder_sent'] = False
-    
-    log_to_console(f"⏰ Next party scheduled for: {party_state['next_party_time'].strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
+    log_to_console(f"⏰ Next party for user {user_id}: {next_party.strftime('%Y-%m-%d %H:%M:%S UTC')}", "INFO")
     
     await interaction.response.send_message(
-    "✅ **Party Complete!**\n\nNext party in 3 hours! 🎉",
-    ephemeral=True
-)
+        f"✅ **Party Complete!**\n\nNext party: <t:{int(next_party.timestamp())}:R>",
+        ephemeral=True
+    )
+
 
 
 @bot.tree.command(name="adduser", description="Add user to party reminders in a specific channel (Admin only)")
@@ -3092,7 +3113,7 @@ async def add_user(interaction: discord.Interaction, user: discord.User, channel
 
 # 9. ADD THE /sleep COMMAND - Add this after the party_done command:
 
-@bot.tree.command(name="sleep", description="Pause party notifications until a specified time")
+@bot.tree.command(name="sleep", description="Pause your party notifications until a specified time")
 @app_commands.describe(
     hours="Number of hours to sleep (optional)",
     minutes="Number of minutes to sleep (optional)",
@@ -3104,10 +3125,13 @@ async def sleep_command(
     minutes: int = 0,
     until: str = None
 ):
-    """Put party tracker to sleep"""
-    if not party_state['active']:
+    """Put party tracker to sleep for this user"""
+    user_id = interaction.user.id
+    
+    # Check if user has started tracking
+    if user_id not in user_party_states:
         await interaction.response.send_message(
-            "⚠️ Party tracking not active! Use `/start` first.",
+            "⚠️ You haven't started party tracking yet! Use `/start` first.",
             ephemeral=True
         )
         return
@@ -3140,19 +3164,19 @@ async def sleep_command(
             if wake_time <= now:
                 wake_time += timedelta(days=1)
             
-            party_state['sleep_until'] = wake_time
+            user_party_states[user_id]['sleep_until'] = wake_time
             time_until_wake = wake_time - now
             hours_until = int(time_until_wake.total_seconds() // 3600)
             minutes_until = int((time_until_wake.total_seconds() % 3600) // 60)
             
             log_to_console(
-                f"💤 Sleep mode activated by {interaction.user.name} until {wake_time.strftime('%H:%M UTC')} "
+                f"💤 Sleep mode activated by {interaction.user.name} (ID: {user_id}) until {wake_time.strftime('%H:%M UTC')} "
                 f"({hours_until}h {minutes_until}m)",
                 "INFO"
             )
             
             await interaction.response.send_message(
-                f"💤 **Party Tracker Sleeping**\n\n"
+                f"💤 **Your Party Tracker Sleeping**\n\n"
                 f"Notifications paused until **{wake_time.strftime('%H:%M UTC')}**\n"
                 f"({hours_until}h {minutes_until}m from now)\n\n"
                 f"Sleep well! 🌙",
@@ -3163,15 +3187,15 @@ async def sleep_command(
             # Calculate sleep duration
             sleep_duration = timedelta(hours=hours, minutes=minutes)
             wake_time = datetime.now(timezone.utc) + sleep_duration
-            party_state['sleep_until'] = wake_time
+            user_party_states[user_id]['sleep_until'] = wake_time
             
             log_to_console(
-                f"💤 Sleep mode activated by {interaction.user.name} for {hours}h {minutes}m",
+                f"💤 Sleep mode activated by {interaction.user.name} (ID: {user_id}) for {hours}h {minutes}m",
                 "INFO"
             )
             
             await interaction.response.send_message(
-                f"💤 **Party Tracker Sleeping**\n\n"
+                f"💤 **Your Party Tracker Sleeping**\n\n"
                 f"Notifications paused for **{hours}h {minutes}m**\n"
                 f"Wake up at: {wake_time.strftime('%H:%M UTC')}\n\n"
                 f"Sleep well! 🌙",
@@ -3259,57 +3283,6 @@ async def help_command(interaction: discord.Interaction):
 
 
 # 10. UPDATE send_party_reminder to check sleep mode:
-async def send_party_reminder():
-    """Send party reminder to channels"""
-    # Check if bot is sleeping
-    if party_state.get('sleep_until'):
-        now = datetime.now(timezone.utc)
-        if now < party_state['sleep_until']:
-            time_left = party_state['sleep_until'] - now
-            hours = int(time_left.total_seconds() // 3600)
-            minutes = int((time_left.total_seconds() % 3600) // 60)
-            log_to_console(
-                f"💤 Party reminder skipped - sleeping for {hours}h {minutes}m more",
-                "INFO"
-            )
-            return
-        else:
-            # Wake up time has passed
-            log_to_console("☀️ Sleep time ended - resuming notifications", "SUCCESS")
-            party_state['sleep_until'] = None
-    
-    user_data = await get_ping_users()
-    log_to_console(f"Sending party reminders to {len(user_data)} users...", "INFO")
-    
-    success_count = 0
-    fail_count = 0
-    
-    for user_id, guild_id, channel_id in user_data:
-        try:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                await channel.send(
-                    f"<@{user_id}> Your robo Party is ready"
-                )
-                log_to_console(f"✅ Sent notification to user {user_id} in channel #{channel.name}", "SUCCESS")
-                success_count += 1
-            else:
-                log_to_console(f"❌ Channel {channel_id} not found for user {user_id}", "ERROR")
-                fail_count += 1
-        except Exception as e:
-            log_to_console(f"❌ Failed to send notification to channel {channel_id}: {e}", "ERROR")
-            fail_count += 1
-    
-    log_to_console(f"Party reminders complete: {success_count} sent, {fail_count} failed", "INFO")
-
-# 11. Update the party_state dictionary initialization to include sleep_until:
-party_state = {
-    'active': False,
-    'next_party_time': None,
-    'sleep_until': None,
-    'reminder_sent': False
-}
-
 # ==================== OWNER COMMANDS ====================
 
 @bot.command(name='updating')
@@ -3384,5 +3357,5 @@ if __name__ == '__main__':
     
     print("🚀 Starting Bee Swarm Notifier...")
     print(f"🔐 Admin authentication enabled for user: {ADMIN_USERNAME}")
-    print(f"🐀 Welcome Soryn The Rat: {SORYN_USERNAME}")
+    print(f"🦈 Soryn backend authentication enabled for user: {SORYN_USERNAME}")
     bot.run(DISCORD_TOKEN)
