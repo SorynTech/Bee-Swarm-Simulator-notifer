@@ -1898,13 +1898,20 @@ async def soryn_admin_panel(request):
         except:
             pass
     
-    # Get next party time
-    next_party = "Not active"
-    if party_state['active'] and party_state['next_party_time']:
-        time_left = party_state['next_party_time'] -datetime.now(timezone.utc)
-        hours = int(time_left.total_seconds() // 3600)
-        minutes = int((time_left.total_seconds() % 3600) // 60)
-        next_party = f"{hours}h {minutes}m"
+    # Get next party time - show soonest upcoming party
+    next_party = "No active trackers"
+    if user_party_states:
+        # Find the soonest next party time
+        now = datetime.now(timezone.utc)
+        upcoming_times = [state['next_party_time'] for state in user_party_states.values() 
+                         if state.get('next_party_time') and state['next_party_time'] > now]
+        
+        if upcoming_times:
+            soonest = min(upcoming_times)
+            time_left = soonest - now
+            hours = int(time_left.total_seconds() // 3600)
+            minutes = int((time_left.total_seconds() % 3600) // 60)
+            next_party = f"{hours}h {minutes}m"
     
 # Prepare user data for chart
     user_chart_data = json.dumps([1 if u['is_active'] else 0 for u in users])
@@ -1918,15 +1925,19 @@ async def soryn_admin_panel(request):
     active_user_list = []
     for user in users:
         if user['is_active']:
-            # Check if tracker is sleeping
+            user_id = user['user_id']
+            
+            # Check if this user has a party state and is sleeping
             sleep_status = "Awake"
-            if party_state.get('sleep_until'):
-                now = datetime.now(timezone.utc)
-                if now < party_state['sleep_until']:
-                    time_left = party_state['sleep_until'] - now
-                    hours = int(time_left.total_seconds() // 3600)
-                    minutes = int((time_left.total_seconds() % 3600) // 60)
-                    sleep_status = f"Sleeping until {party_state['sleep_until'].strftime('%H:%M UTC')} ({hours}h {minutes}m)"
+            if user_id in user_party_states:
+                user_state = user_party_states[user_id]
+                if user_state.get('sleep_until'):
+                    now = datetime.now(timezone.utc)
+                    if now < user_state['sleep_until']:
+                        time_left = user_state['sleep_until'] - now
+                        hours = int(time_left.total_seconds() // 3600)
+                        minutes = int((time_left.total_seconds() % 3600) // 60)
+                        sleep_status = f"Sleeping until {user_state['sleep_until'].strftime('%H:%M UTC')} ({hours}h {minutes}m)"
             
             user_info = {
                 'user_id': user['user_id'],
