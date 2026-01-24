@@ -1843,7 +1843,9 @@ async def soryn_admin_panel(request):
     async with db_pool.acquire() as conn:
         total_users = await conn.fetchval('SELECT COUNT(*) FROM robo_party_users')
         active_users = await conn.fetchval('SELECT COUNT(*) FROM robo_party_users WHERE is_active = TRUE')
-        total_parties = await conn.fetchval('SELECT COUNT(*) FROM party_history')
+        
+        # Count active parties (users who have run /start)
+        active_parties_count = len(user_party_states)
         
         # Get all users for notification list with enhanced info
         users = await conn.fetch('''
@@ -1922,24 +1924,48 @@ async def soryn_admin_panel(request):
         for u in users
     ])
     
-    # Prepare active users list with sleep status
+    # Prepare active users list with enhanced status
     active_user_list = []
+    testing_user_list = []
+    OWNER_ID = 447812883158532106
+    
     for user in users:
         if user['is_active']:
             user_id = user['user_id']
             guild_id = user.get('guild_id')
             
-            # Check if this user has a party state in their guild and is sleeping
-            sleep_status = "Awake"
-            if guild_id and (guild_id, user_id) in user_party_states:
-                user_state = user_party_states[(guild_id, user_id)]
-                if user_state.get('sleep_until'):
-                    now = datetime.now(timezone.utc)
-                    if now < user_state['sleep_until']:
-                        time_left = user_state['sleep_until'] - now
-                        hours = int(time_left.total_seconds() // 3600)
-                        minutes = int((time_left.total_seconds() % 3600) // 60)
-                        sleep_status = f"Sleeping until {user_state['sleep_until'].strftime('%H:%M UTC')} ({hours}h {minutes}m)"
+            # Determine user's party tracking status
+            key = (guild_id, user_id) if guild_id else None
+            party_status = "Inactive"  # Default
+            next_party_display = None
+            is_testing = False
+            
+            if key and key in user_party_states:
+                user_state = user_party_states[key]
+                now = datetime.now(timezone.utc)
+                
+                # Check if sleeping
+                if user_state.get('sleep_until') and now < user_state['sleep_until']:
+                    time_left = user_state['sleep_until'] - now
+                    hours = int(time_left.total_seconds() // 3600)
+                    minutes = int((time_left.total_seconds() % 3600) // 60)
+                    party_status = f"Sleeping ({hours}h {minutes}m)"
+                
+                # Check if testing (owner with party time < 5 minutes away)
+                elif user_id == OWNER_ID and user_state.get('next_party_time'):
+                    time_until = user_state['next_party_time'] - now
+                    if 0 < time_until.total_seconds() < 600:  # Less than 10 minutes
+                        party_status = "Testing"
+                        is_testing = True
+                        next_party_display = user_state['next_party_time']
+                    else:
+                        party_status = "Active"
+                        next_party_display = user_state['next_party_time']
+                
+                # Regular active state
+                elif user_state.get('next_party_time'):
+                    party_status = "Active"
+                    next_party_display = user_state['next_party_time']
             
             user_info = {
                 'user_id': user['user_id'],
@@ -1948,16 +1974,17 @@ async def soryn_admin_panel(request):
                 'status': user['status'],
                 'status_emoji': user['status_emoji'],
                 'activity': user['activity'],
-                'sleep_status': sleep_status,
+                'party_status': party_status,
+                'next_party_time': next_party_display,
                 'guild_name': user.get('guild_name', 'Unknown'),
                 'channel_name': user.get('channel_name', 'Unknown')
             }
             
-            # Debug logging for activity
-            if user['activity']:
-                log_to_console(f"📊 User {user['display_name']} has activity: {user['activity']}", "INFO")
-            
-            active_user_list.append(user_info)
+            # Separate testing users from regular users
+            if is_testing:
+                testing_user_list.append(user_info)
+            else:
+                active_user_list.append(user_info)
     
     html = f'''
 <!DOCTYPE html>
@@ -2321,19 +2348,51 @@ async def soryn_admin_panel(request):
             color: #4dd0ff;
         }}
         
-        .sleep-indicator {{
-            background: rgba(255, 204, 0, 0.15);
-            border: 1px solid rgba(255, 204, 0, 0.5);
+        .party-status-indicator {{
             padding: 0.4rem 0.8rem;
             border-radius: 6px;
             font-size: 0.85rem;
-            color: #ffcc00;
+            font-weight: 600;
+            margin: 0.3rem 0;
         }}
         
-        .sleep-indicator.awake {{
+        .party-status-indicator.active {{
             background: rgba(0, 255, 136, 0.15);
             border: 1px solid rgba(0, 255, 136, 0.5);
             color: #00ff88;
+        }}
+        
+        .party-status-indicator.inactive {{
+            background: rgba(255, 68, 68, 0.15);
+            border: 1px solid rgba(255, 68, 68, 0.5);
+            color: #ff6666;
+        }}
+        
+        .party-status-indicator.sleeping {{
+            background: rgba(255, 204, 0, 0.15);
+            border: 1px solid rgba(255, 204, 0, 0.5);
+            color: #ffcc00;
+        }}
+        
+        .party-status-indicator.testing {{
+            background: rgba(138, 43, 226, 0.15);
+            border: 1px solid rgba(138, 43, 226, 0.5);
+            color: #ba55d3;
+            animation: testingPulse 2s ease-in-out infinite;
+        }}
+        
+        @keyframes testingPulse {{
+            0%, 100% {{
+                box-shadow: 0 0 5px rgba(138, 43, 226, 0.3);
+            }}
+            50% {{
+                box-shadow: 0 0 15px rgba(138, 43, 226, 0.6);
+            }}
+        }}
+        
+        .testing-card {{
+            border: 2px solid rgba(138, 43, 226, 0.4);
+            background: linear-gradient(135deg, rgba(138, 43, 226, 0.05) 0%, rgba(75, 0, 130, 0.05) 100%);
         }}
         
         .user-location {{
@@ -2617,8 +2676,8 @@ async def soryn_admin_panel(request):
             
             <div class="stat-card">
                 <div class="stat-icon">🎉</div>
-                <div class="stat-label">Total Parties</div>
-                <div class="stat-value">{total_parties}</div>
+                <div class="stat-label">Users with Parties Active</div>
+                <div class="stat-value">{active_parties_count}/{active_users}</div>
             </div>
         </div>
         
@@ -2637,8 +2696,13 @@ async def soryn_admin_panel(request):
                         </div>
                         <div class="user-status-text">{u['status']}</div>
                         {f'<div class="user-activity-badge">{u["activity"]}</div>' if u.get('activity') and u['activity'] is not None and str(u['activity']).strip() else ''}
-                        <div class="sleep-indicator {"awake" if u['sleep_status'] == "Awake" else ""}">
-                            {"✅ " + u['sleep_status'] if u['sleep_status'] == "Awake" else "💤 " + u['sleep_status']}
+                        <div class="party-status-indicator {u['party_status'].lower().split()[0]}">
+                            {
+                                "✅ Active: " + u['next_party_time'].strftime('%H:%M UTC') if u['party_status'] == "Active" and u.get('next_party_time') else
+                                "❌ Inactive" if u['party_status'] == "Inactive" else
+                                "💤 " + u['party_status'] if "Sleeping" in u['party_status'] else
+                                u['party_status']
+                            }
                         </div>
                         <div class="user-location">
                             📍 {u['guild_name']} → {u['channel_name']}
@@ -2648,6 +2712,35 @@ async def soryn_admin_panel(request):
                 ''' for u in active_user_list]) if active_user_list else '<p style="text-align: center; color: #4dd0ff; padding: 2rem;">No active users currently registered.</p>'}
             </div>
         </div>
+        
+        {'''
+        <div class="section">
+            <h2 class="section-title">
+                <span>🧪</span>
+                Testing Mode
+            </h2>
+            <div class="active-users-grid">
+                ''' + "".join([f'''
+                <div class="active-user-card testing-card">
+                    <img src="{u['avatar_url']}" alt="{u['display_name']}" class="user-avatar" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                    <div class="user-details">
+                        <div class="user-name-row">
+                            {u['status_emoji']} <strong>{u['display_name']}</strong>
+                        </div>
+                        <div class="user-status-text">{u['status']}</div>
+                        {f'<div class="user-activity-badge">{u["activity"]}</div>' if u.get('activity') and u['activity'] is not None and str(u['activity']).strip() else ''}
+                        <div class="party-status-indicator testing">
+                            🧪 Testing: {u['next_party_time'].strftime('%H:%M UTC') if u.get('next_party_time') else 'Soon'}
+                        </div>
+                        <div class="user-location">
+                            📍 {u['guild_name']} → {u['channel_name']}
+                        </div>
+                    </div>
+                </div>
+                ''' for u in testing_user_list]) + '''
+            </div>
+        </div>
+        ''' if testing_user_list else ''}
         
         <div class="section">
             <h2 class="section-title">
@@ -2934,22 +3027,39 @@ async def notification_checker():
             # Time to send notification to this user!
             try:
                 # Get user's channel from database
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute(
-                    'SELECT channel_id FROM robo_party_users WHERE user_id = %s AND guild_id = %s AND is_active = TRUE',
-                    (user_id, guild_id)
-                )
-                result = cur.fetchone()
-                cur.close()
-                return_db_connection(conn)
+                async with db_pool.acquire() as conn:
+                    result = await conn.fetchrow(
+                        'SELECT channel_id FROM robo_party_users WHERE user_id = $1 AND guild_id = $2 AND is_active = TRUE',
+                        user_id, guild_id
+                    )
                 
                 if result:
-                    channel_id = result[0]
+                    channel_id = result['channel_id']
                     channel = bot.get_channel(channel_id)
                     
                     if channel:
-                        await channel.send(f"<@{user_id}> Your robo Party is ready")
+                        OWNER_ID = 447812883158532106
+                        
+                        # Check if this is a test notification (owner with time < 10 minutes)
+                        time_until = next_party_time - now
+                        is_test = (user_id == OWNER_ID and time_until.total_seconds() < 600)
+                        
+                        if is_test:
+                            # Test notification for owner
+                            await channel.send(f"⚠️ <@{user_id}> Your Test notification is here")
+                        else:
+                            # Regular party notification with more lively messages
+                            messages = [
+                                f"🎉 <@{user_id}> Party time! Your Robo Party is ready to roll!",
+                                f"🤖 <@{user_id}> Beep boop! Time to party - your Robo Party awaits!",
+                                f"⚡ <@{user_id}> Get ready! Your Robo Party is starting now!",
+                                f"🎊 <@{user_id}> Hey! Your Robo Party is ready - let's go!",
+                                f"✨ <@{user_id}> Robo Party time! Get in there and have fun!"
+                            ]
+                            import random
+                            message = random.choice(messages)
+                            await channel.send(message)
+                        
                         log_to_console(f"✅ Sent party notification to user {user_id} in guild {guild_id}", "SUCCESS")
                         notifications_sent += 1
                         
@@ -3283,6 +3393,52 @@ async def sleep_command(
             "❌ Invalid input! Please check your numbers.",
             ephemeral=True
         )
+
+
+@bot.command(name='test')
+async def test_notification(ctx):
+    """Test command for owner to verify notifications work - prefix command"""
+    OWNER_ID = 447812883158532106
+    
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ This command is owner-only!")
+        return
+    
+    user_id = ctx.author.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    
+    if not guild_id:
+        await ctx.send("❌ This command can only be used in a server!")
+        return
+    
+    # Check if user is in database
+    async with db_pool.acquire() as conn:
+        result = await conn.fetchrow(
+            'SELECT channel_id FROM robo_party_users WHERE user_id = $1 AND guild_id = $2',
+            user_id, guild_id
+        )
+    
+    if not result:
+        await ctx.send("⚠️ You need to be added via `/adduser` first!")
+        return
+    
+    # Set party time to 5 minutes from now
+    key = (guild_id, user_id)
+    test_time = datetime.now(timezone.utc) + timedelta(minutes=5)
+    
+    if key not in user_party_states:
+        user_party_states[key] = {}
+    
+    user_party_states[key]['next_party_time'] = test_time
+    user_party_states[key]['sleep_until'] = None
+    
+    log_to_console(f"🧪 TEST: Party notification scheduled for {ctx.author.name} in 5 minutes", "INFO")
+    
+    await ctx.send(
+        f"🧪 **Test Mode Activated**\n\n"
+        f"You will be pinged in **5 minutes** at <t:{int(test_time.timestamp())}:T>\n"
+        f"Watch this channel for your notification!"
+    )
 
 
 @bot.tree.command(name="help", description="View all available commands and how to use the bot")
